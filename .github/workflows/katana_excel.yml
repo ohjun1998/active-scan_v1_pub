@@ -70,11 +70,23 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
+            # GitHub Actions 가상머신에 내장된 순정 구글 크롬 브라우저 경로 바인딩
+            export SOURCE_CHROME="/usr/bin/google-chrome"
+
+            # Katana 고성능 우회 스펙 전개
             katana -u "$TARGET_URL" \
+              -system-chrome \
+              -chrome-path "$SOURCE_CHROME" \
               -c 2 \
-              -rl 5 \
+              -rl 4 \
               -rd 1 \
               -d 3 \
+              -js-crawl \
+              -automatic-form-fill \
+              -crawl-strategy depth-first \
+              -ex "jpg,jpeg,png,gif,css,woff,woff2,svg,ico,ttf,eot,mp4,avi,mp3" \
+              -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+              -H "Accept-Language: ko-KR,ko;q=0.9,en-US;q=0.8" \
               -fs fqdn \
               -cs "$HOSTNAME" \
               -sc \
