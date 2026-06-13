@@ -24,7 +24,7 @@ jobs:
       matrix:
         index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
       max-parallel: 20
-      fail-fast: false # 🚀 [치명적 에러 해결] 한 사이트가 실패해도 다른 사이트 스캔 가상머신은 강제 취소되지 않고 끝까지 돌아갑니다!
+      fail-fast: false # 한 사이트가 실패해도 다른 사이트 스캔 가상머신은 강제 취소되지 않습니다.
     
     steps:
       - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
@@ -39,16 +39,19 @@ jobs:
         run: |
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           
-      - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링
+      - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링 (★서브도메인 제외 반영)
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
           # 1. Katana 스캔을 백그라운드(&)로 실행
+          # [핵심 수정 사항]
+          # -cs host  : 호스트 스코프 지정 (입력한 호스트 외 다른 서브도메인은 절대 스캔하지 않음)
           katana -u "${{ env.TARGET_URL }}" \
             -c 1 \
             -rl 3 \
             -rd 2 \
             -d 2 \
+            -cs host \
             -tlsi random \
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
             -jsonl \
@@ -56,15 +59,15 @@ jobs:
           
           KATANA_PID=$!
           
-          echo "⏳ [VM-${{ matrix.strategy.job-index || matrix.index }}] Katana 스텔스 스캔 시작 (PID: $KATANA_PID)"
-          echo "📢 차단 방지를 위해 천천히 돌고 있으니 안심하셔도 됩니다. 30초마다 진행 상황을 출력합니다."
+          echo "⏳ [VM-${{ matrix.index }}] 호스트 지정형 스텔스 스캔 시작 (PID: $KATANA_PID)"
+          echo "📢 지정한 주소의 정확한 호스트만 크롤링합니다. (다른 서브도메인 타겟 자동 제외)"
           
           # 2. 30초마다 모니터링 로그 출력
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
             if [ -f katana_output.jsonl ]; then
               CURRENT_COUNT=$(wc -l < katana_output.jsonl)
-              echo "📊 [VM-${{ matrix.index }} 진행 상황] 현재까지 총 ${CURRENT_COUNT}개의 엔드포인트 수집 완료..."
+              echo "📊 [VM-${{ matrix.index }} 진행 상황] 현재까지 지정 호스트 내부에서 ${CURRENT_COUNT}개의 엔드포인트 수집..."
             else
               echo "📊 [VM-${{ matrix.index }} 진행 상황] 스캔 준비 중 또는 첫 엔드포인트 탐색 중..."
             fi
@@ -73,24 +76,23 @@ jobs:
           wait $KATANA_PID
           EXIT_CODE=$?
           
-          # 🔥 [리다이렉션 에러 해결] 파일이 진짜 있을 때만 줄 수를 세고, 없으면 빈 파일을 만들어 에러를 원천 차단합니다.
+          # 파일 존재 여부 안전 검사
           if [ -f katana_output.jsonl ]; then
             FINAL_COUNT=$(wc -l < katana_output.jsonl)
           else
             FINAL_COUNT=0
             touch katana_output.jsonl
-            echo "⚠️ [VM-${{ matrix.index }}] 결과 파일이 생성되지 않아 빈 파일을 생성했습니다. (차단되었거나 링크가 없을 수 있음)"
+            echo "⚠️ [VM-${{ matrix.index }}] 결과 파일이 생성되지 않아 빈 파일을 생성했습니다."
           fi
           
           if [ $EXIT_CODE -eq 0 ]; then
-            echo "🏁 [VM-${{ matrix.index }} 완료] 스캔이 성공적으로 끝났습니데이! (최종 수집: ${FINAL_COUNT}개)"
+            echo "🏁 [VM-${{ matrix.index }} 완료] 스캔 성공! (지정 호스트 내 최종 수집: ${FINAL_COUNT}개)"
           else
-            echo "❌ [VM-${{ matrix.index }} 실패] Katana 실행 중 에러가 발생했거나 강제 종료되었습니다. (Exit Code: $EXIT_CODE)"
+            echo "❌ [VM-${{ matrix.index }} 실패] Katana 실행 중 에러 발생 (Exit Code: $EXIT_CODE)"
           fi
 
       - name: 결과물 비밀번호 압축 암호화 (Public 노출 방지)
         run: |
-          # 위 단계에서 무조건 파일 생성이 보장되므로 zip 에러가 나지 않습니다.
           zip -P "${{ secrets.ARTIFACT_PASSWORD }}" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
       - name: 임시 아티팩트 업로드
@@ -103,7 +105,7 @@ jobs:
   # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
-    if: always() # 🚀 한두 개 사이트가 실패해서 Job이 멈춰도, 병합 단계는 '무조건' 실행하여 살아남은 결과들을 엑셀로 뽑아냅니다.
+    if: always() # 실패한 파트가 있어도 성공한 파트들을 모아 엑셀 병합 무조건 진행
     runs-on: ubuntu-latest
     steps:
       - name: 레포지토리 코드 가져오기
@@ -122,7 +124,7 @@ jobs:
         with:
           pattern: part-*
           path: encrypted_parts
-          ignore-on-missing-artifact: true # 혹시 아예 업로드 실패한 파트가 있어도 넘어가고 병합 진행
+          ignore-on-missing-artifact: true
 
       - name: 비밀번호 해독 및 압축 해제
         run: |
@@ -146,7 +148,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: multipart/form-data" \
                  -F "file=@katana_multi_scan_report.xlsx" \
-                 -F "payload_json={\"content\": \"🚀 **초고속 병렬 Katana 스캔 완료!** 가상머신들을 동시 가동하여 수집한 통합 엑셀 파일입니다. (Public 안전 모드)\"}" \
+                 -F "payload_json={\"content\": \"🚀 **지정 호스트 한정 병렬 Katana 스캔 완료!** 다른 서브도메인을 제외한 통합 엑셀 파일입니다.\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
