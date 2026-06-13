@@ -68,32 +68,39 @@ jobs:
           KATANA_PID=$!
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           
-          # 2. 🔥 [실시간 실시간 카운터 및 로그 결합 가동]
+          # 2. [실시간 실시간 카운터 및 로그 결합 가동]
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
             echo "===================================================="
             
-            # 📊 분모 계산: 현재 기입된 고유 엔드포인트 총량
-            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null || echo 0)
+            # 개행 깨짐 방지용 박멸 로직
+            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+            CURRENT_REQ=$(grep -c '"endpoint"' katana_verbose.log 2>/dev/null | tr -d '[:space:]' || echo 0)
             
-            # 🎯 분자 계산: Katana verbose 로그에서 실제 발송한 HTTP 요청 수 카운트
-            CURRENT_REQ=$(grep -c "Sending request to" katana_verbose.log 2>/dev/null || echo 0)
+            if [ "$CURRENT_REQ" -eq 0 ]; then
+              CURRENT_REQ=$(grep -c "Sending request to" katana_verbose.log 2>/dev/null | tr -d '[:space:]' || echo 0)
+            fi
             
-            # 스캔 초기 진입 단계 분모 방어 처리
-            if [ "$TOTAL_COUNT" -eq 0 ]; then
+            if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" -eq 0 ]; then
               TOTAL_DISPLAY="?"
             else
               TOTAL_DISPLAY="$TOTAL_COUNT"
             fi
             
-            echo "📊 [VM-${{ matrix.index }} 진행률] 실시간 검사 상태: [${CURRENT_REQ}/${TOTAL_DISPLAY}]"
-            
-            # verbose 로그의 마지막 4줄 앞에 실시간 카운터를 조립해서 출력합니다.
+            # verbose 로그 출력 제어 (★오직 URL만 파싱 하도록 전면 개편)
             if [ -f katana_verbose.log ]; then
-              echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 중인 로그]"
-              tail -n 4 katana_verbose.log | while read -r vline; do
-                echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] $vline"
-              done
+              echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 중인 URL]"
+              
+              # 정규식 패턴 매칭으로 JSON 데이터 내부의 'endpoint' 혹은 'url' 주소만 뽑아냅니다.
+              tail -n 10 katana_verbose.log | while read -r vline; do
+                CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
+                [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+                [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
+                
+                if [ -n "$CLEAN_URL" ]; then
+                  echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] ➡️ $CLEAN_URL"
+                fi
+              done | tail -n 4
             fi
             echo "===================================================="
           done
@@ -112,7 +119,7 @@ jobs:
           if [ $FINAL_COUNT -eq 0 ] || [ $EXIT_CODE -ne 0 ]; then
             echo "🚨 [VM-${{ matrix.index }} 원인 분석] 상세 로그 확인:"
             echo "----------------------------------------------------"
-            cat katana_verbose.log
+            cat katana_verbose.log | cut -c 1-150 | head -n 30
             echo "----------------------------------------------------"
           else
             echo "🏁 [VM-${{ matrix.index }} 완료] 스캔 성공! (최종 수집: ${FINAL_COUNT}개)"
@@ -137,7 +144,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: 레포지토리 코드 가져오기
+      - name: レ포지토리 코드 가져오기
         uses: actions/checkout@v4
 
       - name: 파이썬 환경 설정
