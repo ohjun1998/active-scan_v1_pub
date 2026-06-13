@@ -1,7 +1,7 @@
 name: Public-Safe Parallel Multi-Target Katana Scan
 
 on:
-  workflow_dispatch: # Public 저장소 보안을 위해 입력창 없이 수동 버튼만 유지합니다.
+  workflow_dispatch: 
 
 jobs:
   # [1단계] Secrets에서 URL 개수를 파악하여 가상머신 번호 배열([0, 1, 2...])을 동적으로 생성
@@ -13,28 +13,24 @@ jobs:
       - name: 가상머신 인덱스 생성
         id: set-matrix
         run: |
-          # TARGET_URLS의 라인 수를 계산해 공백을 제외한 인덱스 번호 배열([0,1,2..])을 생성합니다.
           JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
-  # [2단계] 생성된 번호만큼 최대 20대의 가상머신을 동시에 띄워 개별 스텔스 스캔 진행
+  # [2단계] 최대 20대의 가상머신을 동시에 띄워 실시간 로그 모니터링 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
     strategy:
       matrix:
         index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
-      max-parallel: 20 # 🚀 최대 20대 동시 가동 (초과 시 먼저 끝나는 대로 즉시 바통 터치)
+      max-parallel: 20
     
     steps:
       - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
         run: |
           INDEX=${{ matrix.index }}
           LINE_NUM=$((INDEX + 1))
-          # Secrets에서 해당 가상머신 번호에 맞는 N번째 줄의 URL만 추출
           TARGET_URL=$(echo "${{ secrets.TARGET_URLS }}" | sed -n "${LINE_NUM}p")
-          
-          # 로그 박제 방지 및 환경변수 등록
           echo "::add-mask::$TARGET_URL"
           echo "TARGET_URL=$TARGET_URL" >> $GITHUB_ENV
 
@@ -42,13 +38,9 @@ jobs:
         run: |
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           
-      - name: Katana 개별 스텔스 스캔 (IP 차단 방지 최적화)
+      - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링 (★수정된 부분)
         run: |
-          # 각 가상머신은 단 하나의 타겟만 담당하므로 안전하고 빠르게 긁어옵니다.
-          # -c 1      : 동시 작업 스레드 1개 (사람처럼 보이게 하여 방화벽 우회)
-          # -rl 3     : 초당 요청수 3개 제한
-          # -rd 2     : 요청 간의 2초 의도적 지연 시간 부여
-          # -tlsi random : TLS 핑거프린트를 난수화하여 WAF 탐지 우회
+          # 1. Katana 스캔을 백그라운드(&)로 실행하여 로그 파일에 결과를 쌓습니다.
           katana -u "${{ env.TARGET_URL }}" \
             -c 1 \
             -rl 3 \
@@ -57,11 +49,38 @@ jobs:
             -tlsi random \
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
             -jsonl \
-            -o katana_output.jsonl
+            -o katana_output.jsonl &
+          
+          # 백그라운드로 실행된 Katana의 프로세스 ID(PID)를 저장합니다.
+          KATANA_PID=$!
+          
+          echo "⏳ [VM-${{ matrix.index }}] Katana 스텔스 스캔 시작 (PID: $KATANA_PID)"
+          echo "📢 차단 방지를 위해 천천히 돌고 있으니 안심하셔도 됩니다. 30초마다 진행 상황을 출력합니다."
+          
+          # 2. Katana 프로세스가 살아있는 동안 30초마다 파일 크기(라인 수)를 체크하여 로그를 남깁니다.
+          while kill -0 $KATANA_PID 2>/dev/null; do
+            sleep 30
+            if [ -f katana_output.jsonl ]; then
+              CURRENT_COUNT=$(wc -l < katana_output.jsonl)
+              echo "📊 [VM-${{ matrix.index }} 진행 상황] 현재까지 총 ${CURRENT_COUNT}개의 엔드포인트 수집 완료..."
+            else
+              echo "📊 [VM-${{ matrix.index }} 진행 상황] 스캔 준비 중 또는 첫 엔드포인트 탐색 중..."
+            fi
+          done
+          
+          # 3. 백그라운드 프로세스가 완벽히 끝날 때까지 대기 후 최종 결과 출력
+          wait $KATANA_PID
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -eq 0 ]; then
+            FINAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null || echo 0)
+            echo "🏁 [VM-${{ matrix.index }} 완료] 스캔이 성공적으로 끝났습니데이! (최종 수집: ${FINAL_COUNT}개)"
+          else
+            echo "❌ [VM-${{ matrix.index }} 실패] Katana 실행 중 에러가 발생했거나 강제 종료되었습니다. (Exit Code: $EXIT_CODE)"
+          fi
 
       - name: 결과물 비밀번호 압축 암호화 (Public 노출 방지)
         run: |
-          # Public 레포 특성상 중간 결과물이 노출되므로 암호화를 걸어버립니다.
           zip -P "${{ secrets.ARTIFACT_PASSWORD }}" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
       - name: 임시 아티팩트 업로드
@@ -69,7 +88,7 @@ jobs:
         with:
           name: part-${{ matrix.index }}
           path: katana_output_${{ matrix.index }}.zip
-          retention-days: 1 # 보안을 위해 하루 뒤 자동 삭제
+          retention-days: 1
 
   # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
@@ -96,7 +115,6 @@ jobs:
       - name: 비밀번호 해독 및 압축 해제
         run: |
           mkdir -p katana_outputs
-          # 다운로드된 모든 ZIP 파일을 찾아 비밀번호를 풀고 폴더에 모읍니다.
           find encrypted_parts -name "*.zip" | while read -r zipfile; do
             unzip -P "${{ secrets.ARTIFACT_PASSWORD }}" -o "$zipfile" -d temp_unzip
             if [ -f temp_unzip/katana_output.jsonl ]; then
