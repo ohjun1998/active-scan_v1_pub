@@ -138,9 +138,9 @@ jobs:
               
               if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
-                if [ "$IDLE_LOOPS" -ge 5 ]; then
+                if [ "$IDLE_LOOPS" -ge 15 ]; then
                   echo "===================================================="
-                  echo "⚠️ [5초 보호장치] 금융 보안 모듈 데드락 감지! 다음 타겟으로 즉시 이동합니다."
+                  echo "⚠️ [15초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 즉시 이동합니다."
                   echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
