@@ -57,7 +57,7 @@ jobs:
             -c 2 \
             -rl 5 \
             -rd 1 \
-            -d 2 \
+            -d 3 \
             -fs fqdn \
             -cs "$HOSTNAME" \
             -sc \
