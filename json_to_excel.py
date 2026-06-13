@@ -30,7 +30,6 @@ jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
 if jsonl_files:
     for file_path in jsonl_files:
-        # errors='ignore' 주입으로 유니코드 깨짐 크래시 원천 차단
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_str = line.strip()
@@ -55,7 +54,8 @@ if jsonl_files:
                             method = obj.get('method', 'GET')
                             
                         timestamp = obj.get('timestamp', '')
-                        source = obj.get('source', '')  # Katana 원본의 소스(출처) 데이터 매핑
+                        # 🔥 [Bug Fix 핵심]: Katana 공식 명세에 맞춰 기존 'source' 키를 'source_url'로 정격 전면 교체!
+                        source = obj.get('source_url', '')
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
                 except Exception:
@@ -85,13 +85,13 @@ if jsonl_files:
                     '찾은 시간 (Timestamp)': timestamp,
                     '요청 메서드 (Method)': method,
                     '발견된 URL (URL)': url_str,
-                    '출처 페이지 (Source)': source,  # 데이터프레임 컬럼 정상 활성화
+                    '출처 페이지 (Source)': source if source else "Direct 랜딩 주소",
                     'HTML 태그 (Tag)': tag,
                     '속성 (Attribute)': attribute
                 }
                 data.append(row)
 
-# 3. 데이터프레임 빌드 및 내림차순/오름차순 정렬
+# 3. 데이터프레임 빌드 및 정렬
 if data:
     df = pd.DataFrame(data)
     df = df.sort_values(by=['대상 타겟 (Target)', '발견된 URL (URL)'], ascending=[False, True])
@@ -122,7 +122,6 @@ for cell in ws_dashboard[1]:
     cell.alignment = center_alignment
 ws_dashboard.row_dimensions[1].height = 24
 
-# B. 도메인 분할 이식 및 하이퍼링크 크로스를 통한 중앙정렬 연산
 total_url_count = 0
 
 if data:
@@ -133,7 +132,7 @@ if data:
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        # 1) 초경량 상단 대시보드 복귀 단추 배너 주입 (A1~H1 병합으로 스펙 업)
+        # 복귀 배너 주입
         ws_domain.merge_cells("A1:H1")
         back_btn = ws_domain["A1"]
         back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
@@ -143,7 +142,7 @@ if data:
         back_btn.alignment = center_alignment
         ws_domain.row_dimensions[1].height = 26
         
-        # 2) 소스 데이터 이식
+        # 소스 데이터 이식
         domain_subset = df[df['대상 타겟 (Target)'] == domain]
         headers = list(df.columns)
         ws_domain.append(headers)
@@ -151,7 +150,7 @@ if data:
         for r in dataframe_to_rows(domain_subset, index=False, header=False):
             ws_domain.append(r)
             
-        # 데이터 탭 테이블 헤더 서식 지정 (2행)
+        # 테이블 헤더 서식 지정 (2행)
         for cell in ws_domain[2]:
             cell.font = header_font
             cell.fill = header_fill
@@ -162,17 +161,15 @@ if data:
         for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
             for cell in row:
                 cell.font = data_font
-                # 가독성 설계: 타겟, 시간, 메서드, 태그, 속성은 가운데 정렬 / 발견 URL과 출처(Source)는 왼쪽 정렬
                 if cell.column in [1, 2, 3, 6, 7]:
                     cell.alignment = center_alignment
                 else:
                     cell.alignment = left_alignment
                     
-                # 긴 긴 URL 텍스트 가독성을 위해 셀 내부 줄바꿈 허용 세팅 보강
                 if cell.column in [4, 5]:
                     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                     
-        # 열 너비 수동 연산 (병합 크래시 우회 엔진 고정)
+        # 열 너비 자동 보정
         for col_idx in range(1, len(headers) + 1):
             max_len = 0
             for row_idx in range(2, ws_domain.max_row + 1):
@@ -180,13 +177,11 @@ if data:
                 if len(val) > max_len:
                     max_len = len(val)
             col_letter = get_column_letter(col_idx)
-            # URL과 출처 페이지 열은 데이터가 길기 때문에 너비를 넉넉하게 보정
             if col_idx in [4, 5]:
                 ws_domain.column_dimensions[col_letter].width = max(max_len + 4, 35)
             else:
                 ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
             
-        # 3) 대시보드 데이터 채우기 및 완벽 정중앙 정렬
         current_domain_count = len(domain_subset)
         total_url_count += current_domain_count
         
@@ -230,4 +225,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [출처 표기 완료] 대시보드 총합 및 소스 맵 연동 완료: {excel_file}")
+print(f"🏁 [출처 반영 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
