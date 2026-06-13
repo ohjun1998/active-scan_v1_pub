@@ -1,7 +1,7 @@
 name: Public-Safe Parallel Multi-Target Katana Scan
 
 on:
-  workflow_dispatch: # Public 저장소 보안을 위해 입력창 없이 수동 버튼만 유지합니다.
+  workflow_dispatch: 
 
 jobs:
   # [1단계] Secrets에서 URL 개수를 파악하여 가상머신 번호 배열([0, 1, 2...])을 동적으로 생성
@@ -13,7 +13,6 @@ jobs:
       - name: 가상머신 인덱스 생성
         id: set-matrix
         run: |
-          # TARGET_URLS의 라인 수를 계산해 공백을 제외한 인덱스 번호 배열([0,1,2..])을 생성합니다.
           JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
@@ -24,7 +23,8 @@ jobs:
     strategy:
       matrix:
         index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
-      max-parallel: 20 # 🚀 최대 20대 동시 가동
+      max-parallel: 20
+      fail-fast: false # 🚀 [치명적 에러 해결] 한 사이트가 실패해도 다른 사이트 스캔 가상머신은 강제 취소되지 않고 끝까지 돌아갑니다!
     
     steps:
       - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
@@ -41,10 +41,9 @@ jobs:
           
       - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링
         run: |
-          # 🔥 Go가 설치된 바이너리 경로를 환경변수에 등록하여 'command not found' 에러를 해결합니다.
           export PATH=$PATH:$(go env GOPATH)/bin
           
-          # 1. Katana 스캔을 백그라운드(&)로 실행하여 로그 파일에 결과를 쌓습니다.
+          # 1. Katana 스캔을 백그라운드(&)로 실행
           katana -u "${{ env.TARGET_URL }}" \
             -c 1 \
             -rl 3 \
@@ -55,13 +54,12 @@ jobs:
             -jsonl \
             -o katana_output.jsonl &
           
-          # 백그라운드로 실행된 Katana의 프로세스 ID(PID)를 저장합니다.
           KATANA_PID=$!
           
-          echo "⏳ [VM-${{ matrix.index }}] Katana 스텔스 스캔 시작 (PID: $KATANA_PID)"
+          echo "⏳ [VM-${{ matrix.strategy.job-index || matrix.index }}] Katana 스텔스 스캔 시작 (PID: $KATANA_PID)"
           echo "📢 차단 방지를 위해 천천히 돌고 있으니 안심하셔도 됩니다. 30초마다 진행 상황을 출력합니다."
           
-          # 2. Katana 프로세스가 살아있는 동안 30초마다 파일 크기(라인 수)를 체크하여 로그를 남깁니다.
+          # 2. 30초마다 모니터링 로그 출력
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
             if [ -f katana_output.jsonl ]; then
@@ -72,12 +70,19 @@ jobs:
             fi
           done
           
-          # 3. 백그라운드 프로세스가 완벽히 끝날 때까지 대기 후 최종 결과 출력
           wait $KATANA_PID
           EXIT_CODE=$?
           
+          # 🔥 [리다이렉션 에러 해결] 파일이 진짜 있을 때만 줄 수를 세고, 없으면 빈 파일을 만들어 에러를 원천 차단합니다.
+          if [ -f katana_output.jsonl ]; then
+            FINAL_COUNT=$(wc -l < katana_output.jsonl)
+          else
+            FINAL_COUNT=0
+            touch katana_output.jsonl
+            echo "⚠️ [VM-${{ matrix.index }}] 결과 파일이 생성되지 않아 빈 파일을 생성했습니다. (차단되었거나 링크가 없을 수 있음)"
+          fi
+          
           if [ $EXIT_CODE -eq 0 ]; then
-            FINAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null || echo 0)
             echo "🏁 [VM-${{ matrix.index }} 완료] 스캔이 성공적으로 끝났습니데이! (최종 수집: ${FINAL_COUNT}개)"
           else
             echo "❌ [VM-${{ matrix.index }} 실패] Katana 실행 중 에러가 발생했거나 강제 종료되었습니다. (Exit Code: $EXIT_CODE)"
@@ -85,6 +90,7 @@ jobs:
 
       - name: 결과물 비밀번호 압축 암호화 (Public 노출 방지)
         run: |
+          # 위 단계에서 무조건 파일 생성이 보장되므로 zip 에러가 나지 않습니다.
           zip -P "${{ secrets.ARTIFACT_PASSWORD }}" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
       - name: 임시 아티팩트 업로드
@@ -92,11 +98,12 @@ jobs:
         with:
           name: part-${{ matrix.index }}
           path: katana_output_${{ matrix.index }}.zip
-          retention-days: 1 # 보안을 위해 하루 뒤 자동 삭제
+          retention-days: 1
 
   # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
+    if: always() # 🚀 한두 개 사이트가 실패해서 Job이 멈춰도, 병합 단계는 '무조건' 실행하여 살아남은 결과들을 엑셀로 뽑아냅니다.
     runs-on: ubuntu-latest
     steps:
       - name: 레포지토리 코드 가져오기
@@ -115,19 +122,21 @@ jobs:
         with:
           pattern: part-*
           path: encrypted_parts
+          ignore-on-missing-artifact: true # 혹시 아예 업로드 실패한 파트가 있어도 넘어가고 병합 진행
 
       - name: 비밀번호 해독 및 압축 해제
         run: |
           mkdir -p katana_outputs
-          # 다운로드된 모든 ZIP 파일을 찾아 비밀번호를 풀고 폴더에 모읍니다.
-          find encrypted_parts -name "*.zip" | while read -r zipfile; do
-            unzip -P "${{ secrets.ARTIFACT_PASSWORD }}" -o "$zipfile" -d temp_unzip
-            if [ -f temp_unzip/katana_output.jsonl ]; then
-              idx=$(basename "$zipfile" .zip | sed 's/katana_output_//')
-              mv temp_unzip/katana_output.jsonl "katana_outputs/part_${idx}.jsonl"
-            fi
-            rm -rf temp_unzip
-          done
+          if [ -d encrypted_parts ]; then
+            find encrypted_parts -name "*.zip" | while read -r zipfile; do
+              unzip -P "${{ secrets.ARTIFACT_PASSWORD }}" -o "$zipfile" -d temp_unzip
+              if [ -f temp_unzip/katana_output.jsonl ]; then
+                idx=$(basename "$zipfile" .zip | sed 's/katana_output_//')
+                mv temp_unzip/katana_output.jsonl "katana_outputs/part_${idx}.jsonl"
+              fi
+              rm -rf temp_unzip
+            done
+          fi
 
       - name: 파이썬 스크립트로 단일 엑셀 변환
         run: python json_to_excel.py
@@ -142,6 +151,6 @@ jobs:
           else
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"⚠️ 병렬 스캔 결과 통합에 실패했거나 데이터가 없습니다.\"}" \
+                 -d "{\"content\": \"⚠️ 병렬 스캔 완료되었으나 모든 타겟이 차단되었거나 수집된 엔드포인트가 없습니다.\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           fi
