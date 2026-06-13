@@ -98,95 +98,105 @@ else:
     df = pd.DataFrame(columns=['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
     df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', '']
 
-# --- 🔥 [새롭게 추가/수정된 대시보드 및 멀티탭 서식 설계 단] ---
-
-# openpyxl 워크북 수동 빌드 구동
+# --- 📊 [초경량 고가독성 엑셀 리모델링 엔진] ---
 wb = Workbook()
 
-# 서식 옵션 정의 (기존 유저님 스타일 스펙 그대로 이식)
-header_font = Font(name='Malgun Gothic', size=11, bold=True, color='000000')
+# 글로벌 공통 서식 옵션 정의
+font_family = 'Malgun Gothic'
+header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid') # 눈이 편안한 미색 블루
-data_font = Font(name='Malgun Gothic', size=10)
-link_font = Font(name='Malgun Gothic', size=10, color='0000FF', underline='single') # 대시보드 하이퍼링크용 파란색 밑줄
+data_font = Font(name=font_family, size=10)
 center_alignment = Alignment(horizontal='center', vertical='center')
+left_alignment = Alignment(horizontal='left', vertical='center')
 
-# A. 대시보드 탭 생성 및 기초 공사
+# A. 대시보드 탭 생성 및 정중앙 정렬 세팅
 ws_dashboard = wb.active
 ws_dashboard.title = "대시보드"
 
 ws_dashboard.append(["대상 타겟 도메인 (Target Domain)", "수집된 고유 URL 개수", "상세 페이지 바로가기"])
 
-# 대시보드 헤더 스타일링
+# 대시보드 헤더 서식 지정
 for cell in ws_dashboard[1]:
     cell.font = header_font
     cell.fill = header_fill
     cell.alignment = center_alignment
 
-# B. 도메인 추출 후 탭 분할 및 하이퍼링크 크로스 매핑 연산
+# B. 도메인별 탭 분할 및 상호 링크 시스템 연산
 if data:
     unique_domains = df['대상 타겟 (Target)'].unique()
     
     for idx, domain in enumerate(unique_domains, start=2):
-        # 1) 해당 도메인 글자로 새 시트(탭) 동적 바인딩
-        # 단, 엑셀 시트명 제약 조건(최대 31자 및 특수문자 제한) 방어를 위해 slice 처리
-        sheet_title = domain[:30]
+        sheet_title = domain[:30] # 엑셀 글자수 제약 31자 방어
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        # 2) 해당 도메인 알짜배기 소스 데이터만 추출 (Subset)
-        domain_subset = df[df['대상 타겟 (Target)'] == domain]
+        # 1) 🔥 [요청 사항] 각 도메인 탭 최상단 A1 셀에 대시보드 복귀 초경량 링크 버튼 주입
+        ws_domain.merge_cells("A1:G1")
+        back_btn = ws_domain["A1"]
+        back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
+        back_btn.hyperlink = "#'대시보드'!A1"
+        back_btn.font = Font(name=font_family, size=11, bold=True, color='FFFFFF')
+        back_btn.fill = PatternFill(start_color='4F81BD', end_color='4F81BD', fill_type='solid') # 깔끔한 블루 버튼 색상
+        back_btn.alignment = center_alignment
+        ws_domain.row_dimensions[1].height = 26 # 버튼 행 높이 확보
         
-        # 3) 컬럼 헤더 주입 및 데이터 로우 단위 안전 이식
+        # 데이터 서브셋 추출 및 주입 (2번째 행부터 헤더 시작)
+        domain_subset = df[df['대상 타겟 (Target)'] == domain]
         headers = list(df.columns)
-        ws_domain.append(headers)
+        ws_domain.append(headers) # 2번째 행에 자동 적재됨
         
         for r in dataframe_to_rows(domain_subset, index=False, header=False):
             ws_domain.append(r)
             
-        # 4) 개별 도메인 시트 내부 가독성 서식 일괄 적용 (기존 스타일 이식 루프)
-        for cell in ws_domain[1]:
+        # 2) 도메인 시트 헤더(2번째 행) 및 데이터 정렬/서식 적용
+        for cell in ws_domain[2]:
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = center_alignment
+        ws_domain.row_dimensions[2].height = 20
             
-        for row in ws_domain.iter_rows(min_row=2, max_row=ws_domain.max_row):
+        for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
             for cell in row:
                 cell.font = data_font
-                if cell.column == 3: # Method 컬럼 중앙 정렬
+                if cell.column in [1, 2, 3, 6, 7]: # 도메인, 타임스탬프, 메서드, 태그 등은 중앙 정렬
                     cell.alignment = center_alignment
+                else:
+                    cell.alignment = left_alignment
                     
-        # 5) 개별 도메인 시트 열 너비 자동 조절 (기존 로직 보완 이식)
+        # 열 너비 자동 조절 (복귀 버튼이 있는 1행은 계산에서 제외)
         for col in ws_domain.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
+            max_len = max(len(str(cell.value or '')) for cell in col[1:]) # 2번째 행부터 너비 계산
             col_letter = col[0].column_letter
-            ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
             
-        # 6) 🔥 [핵심 요청 기능] 대시보드 데이터 생성 및 동적 하이퍼링크 주입
-        ws_dashboard.cell(row=idx, column=1, value=domain).font = data_font
-        ws_dashboard.cell(row=idx, column=2, value=len(domain_subset)).font = data_font
-        ws_dashboard.cell(row=idx, column=2).alignment = center_alignment
+        # 3) 🔥 [요청 사항] 대시보드 데이터 삽입 및 글자 정중앙 정렬
+        ws_dashboard.cell(row=idx, column=1, value=domain).alignment = center_alignment
+        ws_dashboard.cell(row=idx, column=2, value=len(domain_subset)).alignment = center_alignment
         
-        # 하이퍼링크 객체 조립: 클릭하면 해당 시트의 A1 셀로 화면 점프 연동
-        link_cell = ws_dashboard.cell(row=idx, column=3, value="👉 클릭하여 해당 탭으로 이동")
-        link_cell.hyperlink = f"#'{sheet_title}'!A1"
-        link_cell.font = link_font
+        link_cell = ws_dashboard.cell(row=idx, column=3, value="🔍 상세 내역 시트로 탭 이동")
+        link_cell.hyperlink = f"#'{sheet_title}'!A2" # 탭 이동 시 2행(헤더 위치)으로 스크롤 이동
+        link_cell.font = Font(name=font_family, size=10, color='0056B3', underline='single')
         link_cell.alignment = center_alignment
+        
+        ws_dashboard.row_dimensions[idx].height = 22
+        
+        # 대시보드 폰트 적용
+        ws_dashboard.cell(row=idx, column=1).font = data_font
+        ws_dashboard.cell(row=idx, column=2).font = Font(name=font_family, size=10, bold=True)
 
 else:
-    # 데이터가 아예 없을 때의 방어 예외 시트 빌드 (기존 유지 반영)
     ws_empty = wb.create_sheet(title="결과 없음")
-    headers = ['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)']
-    ws_empty.append(headers)
+    ws_empty.append(list(df.columns))
     ws_empty.append(['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', ''])
     
-    ws_dashboard.cell(row=2, column=1, value="N/A").font = data_font
-    ws_dashboard.cell(row=2, column=2, value=0).font = data_font
-    ws_dashboard.cell(row=2, column=3, value="데이터 없음").font = data_font
+    ws_dashboard.cell(row=2, column=1, value="N/A").alignment = center_alignment
+    ws_dashboard.cell(row=2, column=2, value=0).alignment = center_alignment
+    ws_dashboard.cell(row=2, column=3, value="데이터 없음").alignment = center_alignment
 
-# 대시보드 탭 열 너비 이쁘게 보정
-for col in ws_dashboard.columns:
-    max_len = max(len(str(cell.value or '')) for cell in col)
-    ws_dashboard.column_dimensions[col[0].column_letter].width = max(max_len + 5, 25)
+# 대시보드 자체 열 너비 가독성 최적화
+ws_dashboard.column_dimensions['A'].width = 38
+ws_dashboard.column_dimensions['B'].width = 24
+ws_dashboard.column_dimensions['C'].width = 28
 
 # 4. 파일 최종 세이브
 wb.save(excel_file)
-print(f"🏁 [최종 성공] 대시보드 하이퍼링크 연동 엑셀 리포트 패키징 완료: {excel_file}")
+print(f"🏁 [리모델링 완료] 대시보드 중앙 정렬 및 복귀 버튼 설계 완수: {excel_file}")
