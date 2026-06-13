@@ -11,8 +11,12 @@ data = []
 # 각 VM에서 수집되어 복호화된 jsonl 파일들 매핑
 jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
+# 🚀 [추적 모니터링 로그] 파이썬이 실제로 어떤 파일들을 찾았는지 출력해 줍니다.
+print(f"🔍 [파이썬 디버그] 탐색된 수집 파일 목록: {jsonl_files}")
+
 if jsonl_files:
     for file_path in jsonl_files:
+        print(f"📖 현재 파일 분석 중: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line_str = line.strip()
@@ -26,11 +30,10 @@ if jsonl_files:
                 tag = ""
                 attribute = ""
                 
-                # 1. JSON 구조 파싱 시도
                 try:
                     obj = json.loads(line_str)
                     
-                    # 🔥 [버그 해결] 내포 구조(Standard Katana)와 평면 구조 둘 다 완벽 대응
+                    # 구조 매핑 완벽 대응
                     if 'request' in obj and isinstance(obj['request'], dict):
                         url_str = obj['request'].get('url', '')
                         method = obj['request'].get('method', 'GET')
@@ -44,15 +47,12 @@ if jsonl_files:
                     attribute = obj.get('attribute', '')
                     
                 except Exception:
-                    # 2. 만약 예외 상황으로 일반 텍스트(URL 리스트) 형태로 저장되었을 경우 우회 대응
                     if line_str.startswith('http://') or line_str.startswith('https://'):
                         url_str = line_str
 
-                # URL 정보가 끝까지 안 찾아지면 스킵
                 if not url_str:
                     continue
                     
-                # 타겟 도메인 분리 (예: https://apple.test.com/path -> apple.test.com)
                 try:
                     if '//' in url_str:
                         target_source = url_str.split('/')[2]
@@ -76,11 +76,12 @@ if jsonl_files:
 if data:
     df = pd.DataFrame(data)
     df = df.sort_values(by=['대상 타겟 (Target)', '발견된 URL (URL)'])
+    print(f"🟢 [성공] 총 {len(data)}개의 가용한 엔드포인트를 매핑했습니다.")
 else:
     df = pd.DataFrame(columns=['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
     df.loc[0] = ['스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', '']
+    print("⚠️ [경고] 처리할 데이터가 하나도 없습니다. 데이터 풀을 확인하세요.")
 
-# 최종 엑셀 파일 생성 및 서식 자동 지정
 with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
     df.to_excel(writer, index=False, sheet_name='통합 병렬스캔 결과')
     worksheet = writer.sheets['통합 병렬스캔 결과']
@@ -89,5 +90,3 @@ with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = col[0].column_letter
         worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
-
-print(f"🟢 총 {len(data)}개의 데이터가 정상적으로 통합되어 엑셀로 변환되었습니다!")
