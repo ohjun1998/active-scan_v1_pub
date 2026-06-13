@@ -4,7 +4,6 @@ on:
   workflow_dispatch: 
 
 jobs:
-  # [1단계] 20대의 가상머신(0~19) 인덱스 배열을 고정으로 생성
   setup-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -16,7 +15,6 @@ jobs:
           JSON_STRING=$(jq -n -c '[range(0; 20)]')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
-  # [2단계] 정확히 20대의 가상머신이 97개 도메인을 4~5개씩 나누어서 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
@@ -38,11 +36,9 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
-          # 브라우저 샌드박스 우회 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 현재 가상머신의 고유 번호 (0 ~ 19)
           VM_IDX=${{ matrix.index }}
           
           TOTAL_TARGETS=()
@@ -55,7 +51,6 @@ jobs:
           ${{ secrets.TARGET_URLS }}
           EOF
           
-          NUM_TARGETS=${{ '$\{#TOTAL_TARGETS\[@\]\}' }}
           NUM_TARGETS=${#TOTAL_TARGETS[@]}
           
           echo "📊 전체 타겟 개수: $NUM_TARGETS 개"
@@ -64,7 +59,6 @@ jobs:
           
           touch katana_output.jsonl
           
-          # 지능형 20배수 순차 탐색 루프
           for (( i=$VM_IDX; i<$NUM_TARGETS; i+=20 )); do
             TARGET_URL="${TOTAL_TARGETS[$i]}"
             echo "::add-mask::$TARGET_URL"
@@ -76,7 +70,6 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # Katana 고속 스캔 실행
             katana -u "$TARGET_URL" \
               -c 2 \
               -rl 5 \
@@ -93,15 +86,16 @@ jobs:
             
             KATANA_PID=$!
             
-            # 🔥 [버그 대수리] 실시간 스트리밍 분석 시 버퍼 오류를 막기 위해 구조적 정규식 파싱 적용
+            # 🔥 [버그 해결]: 쉘 버퍼에 상관없이 고유 depth 문자열을 완벽 추적하는 정밀 스캐너 단
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
-              # 문자열 내부에 박힌 depth 필드를 하드코딩 없이 유연하게 가로챕니다.
-              V_DEPTH=$(echo "$vline" | grep -o '"depth":[0-9]' | cut -d':' -f2)
-              if [ -z "$V_DEPTH" ]; then
+              # awk 기법을 통하여 줄바꿈 오작동 시에도 객체 내부의 depth:X 값을 정밀하게 발라냅니다.
+              V_DEPTH=$(echo "$vline" | awk -F'"depth":' '{print $2}' | cut -c1)
+              
+              if [ -z "$V_DEPTH" ] || ! [[ "$V_DEPTH" =~ ^[1-3]$ ]]; then
                 if echo "$vline" | grep -q "Sending request to"; then
                   V_DEPTH="1"
                 else
@@ -177,7 +171,6 @@ jobs:
           path: katana_output_${{ matrix.index }}.zip
           retention-days: 1
 
-  # [3단계] 20대의 가상머신 결과물을 하나로 긁어모아 엑셀 변환 및 디코드 토스
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
     if: always()
@@ -233,7 +226,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 분할 고속 병렬 스캔 및 대시보드 하이퍼링크 엑셀 변환 성공!** \n\n결과 리포트는 아래 링크 하단 'Artifacts'에서 안전하게 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 균등 배정 완료 및 고가독성 하이퍼링크 대시보드 엑셀 병합 성공!** \n\n결과 리포트는 아래 링크 하단 'Artifacts'에서 안전하게 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
