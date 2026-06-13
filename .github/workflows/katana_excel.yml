@@ -21,8 +21,7 @@ jobs:
     needs: setup-matrix
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
+      matrix(matrix-json): ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
       max-parallel: 20
       fail-fast: false
     
@@ -47,11 +46,15 @@ jobs:
           HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
-          # 브라우저 샌드박스 크래시 차단 우회 보호
+          # 브라우저 샌드박스 우회 보호 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 1. Katana 고속 스캔 실행 (백그라운드)
+          # 로그 파일 초기화
+          touch katana_verbose.log
+          touch katana_output.jsonl
+          
+          # 1. Katana 고속 스캔 실행 (백그라운드 구동)
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
@@ -67,42 +70,31 @@ jobs:
           
           KATANA_PID=$!
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
+          echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
           
-          # 2. [실시간 실시간 카운터 및 로그 결합 가동]
-          while kill -0 $KATANA_PID 2>/dev/null; do
-            sleep 30
-            echo "===================================================="
+          # 2. 🔥 [실시간 1발씩 스트리밍 엔진]
+          # --pid 플래그 덕분에 Katana 프로세스가 죽으면 tail도 알아서 실시간으로 자동 종료됩니다.
+          CURRENT_REQ=0
+          tail -f --pid=$KATANA_PID -n +1 katana_verbose.log | while read -r vline; do
+            # JSON 로그에서 엔드포인트 주소 정밀 추출
+            CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
+            [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+            [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
             
-            # 개행 깨짐 방지용 박멸 로직
-            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
-            CURRENT_REQ=$(grep -c '"endpoint"' katana_verbose.log 2>/dev/null | tr -d '[:space:]' || echo 0)
-            
-            if [ "$CURRENT_REQ" -eq 0 ]; then
-              CURRENT_REQ=$(grep -c "Sending request to" katana_verbose.log 2>/dev/null | tr -d '[:space:]' || echo 0)
-            fi
-            
-            if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" -eq 0 ]; then
-              TOTAL_DISPLAY="?"
-            else
-              TOTAL_DISPLAY="$TOTAL_COUNT"
-            fi
-            
-            # verbose 로그 출력 제어 (★오직 URL만 파싱 하도록 전면 개편)
-            if [ -f katana_verbose.log ]; then
-              echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 중인 URL]"
+            # 주소가 정상적으로 추출되었을 때만 화면에 즉시 한 줄 출력
+            if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
+              CURRENT_REQ=$((CURRENT_REQ + 1))
+              TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
               
-              # 정규식 패턴 매칭으로 JSON 데이터 내부의 'endpoint' 혹은 'url' 주소만 뽑아냅니다.
-              tail -n 10 katana_verbose.log | while read -r vline; do
-                CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
-                [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
-                [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
-                
-                if [ -n "$CLEAN_URL" ]; then
-                  echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] ➡️ $CLEAN_URL"
-                fi
-              done | tail -n 4
+              if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" -eq 0 ]; then
+                TOTAL_DISPLAY="?"
+              else
+                TOTAL_DISPLAY="$TOTAL_COUNT"
+              fi
+              
+              # 30초 대기 없이 주소 탐색될 때마다 실시간으로 1줄씩 쏴줍니다.
+              echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] ➡️ $CLEAN_URL"
             fi
-            echo "===================================================="
           done
           
           wait $KATANA_PID
@@ -115,15 +107,7 @@ jobs:
             FINAL_COUNT=0
             touch katana_output.jsonl
           fi
-          
-          if [ $FINAL_COUNT -eq 0 ] || [ $EXIT_CODE -ne 0 ]; then
-            echo "🚨 [VM-${{ matrix.index }} 원인 분석] 상세 로그 확인:"
-            echo "----------------------------------------------------"
-            cat katana_verbose.log | cut -c 1-150 | head -n 30
-            echo "----------------------------------------------------"
-          else
-            echo "🏁 [VM-${{ matrix.index }} 완료] 스캔 성공! (최종 수집: ${FINAL_COUNT}개)"
-          fi
+          echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집: ${FINAL_COUNT}개"
 
       - name: 결과물 비밀번호 압축 암호화 (특수문자 차단 우회 보호)
         env:
@@ -144,7 +128,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: レ포지토리 코드 가져오기
+      - name: 레포지토리 코드 가져오기
         uses: actions/checkout@v4
 
       - name: 파이썬 환경 설정
