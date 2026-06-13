@@ -1,7 +1,7 @@
 name: Public-Safe Parallel Multi-Target Katana Scan
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch: # Public 저장소 보안을 위해 입력창 없이 수동 버튼만 유지합니다.
 
 jobs:
   # [1단계] Secrets에서 URL 개수를 파악하여 가상머신 번호 배열([0, 1, 2...])을 동적으로 생성
@@ -13,6 +13,7 @@ jobs:
       - name: 가상머신 인덱스 생성
         id: set-matrix
         run: |
+          # TARGET_URLS의 라인 수를 계산해 공백을 제외한 인덱스 번호 배열([0,1,2..])을 생성합니다.
           JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
@@ -23,7 +24,7 @@ jobs:
     strategy:
       matrix:
         index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
-      max-parallel: 20
+      max-parallel: 20 # 🚀 최대 20대 동시 가동
     
     steps:
       - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
@@ -38,8 +39,11 @@ jobs:
         run: |
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           
-      - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링 (★수정된 부분)
+      - name: Katana 개별 스텔스 스캔 & 실시간 로그 모니터링
         run: |
+          # 🔥 Go가 설치된 바이너리 경로를 환경변수에 등록하여 'command not found' 에러를 해결합니다.
+          export PATH=$PATH:$(go env GOPATH)/bin
+          
           # 1. Katana 스캔을 백그라운드(&)로 실행하여 로그 파일에 결과를 쌓습니다.
           katana -u "${{ env.TARGET_URL }}" \
             -c 1 \
@@ -88,7 +92,7 @@ jobs:
         with:
           name: part-${{ matrix.index }}
           path: katana_output_${{ matrix.index }}.zip
-          retention-days: 1
+          retention-days: 1 # 보안을 위해 하루 뒤 자동 삭제
 
   # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
@@ -115,6 +119,7 @@ jobs:
       - name: 비밀번호 해독 및 압축 해제
         run: |
           mkdir -p katana_outputs
+          # 다운로드된 모든 ZIP 파일을 찾아 비밀번호를 풀고 폴더에 모읍니다.
           find encrypted_parts -name "*.zip" | while read -r zipfile; do
             unzip -P "${{ secrets.ARTIFACT_PASSWORD }}" -o "$zipfile" -d temp_unzip
             if [ -f temp_unzip/katana_output.jsonl ]; then
