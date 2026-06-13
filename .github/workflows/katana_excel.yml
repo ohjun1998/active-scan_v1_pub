@@ -43,15 +43,13 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
-          # 🔥 [원인 해결 1] TARGET_URL에서 실제 호스트명(예: apple.test.com)을 동적으로 추출합니다.
-          HOSTNAME=$(echo "${{ env.TARGET_URL }}" | awk -F/ '{print $3}')
+          # 🔥 [원인 해결 1] 깃허브 치환 테러를 피하기 위해 리눅스 변수($TARGET_URL)를 직접 파싱하여 호스트명을 정상 추출합니다.
+          HOSTNAME=$(echo "$TARGET_URL" | awk -F/ '{print $3}')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
           # 1. Katana 스캔을 백그라운드로 실행
-          # 🔥 [원인 해결 2] -cs 플래그에 동적으로 추출한 호스트명 정규식을 주입합니다.
-          # 이로써 다른 서브도메인(banana, chicken 등)으로 새는 것을 완벽히 차단하면서 내 타겟은 정상적으로 스캔합니다.
-          # 🔥 [원인 해결 3] 꼬임을 유발하던 -tlsi 옵션을 제거하여 안정성을 확보합니다.
-          katana -u "${{ env.TARGET_URL }}" \
+          # 🔥 [원인 해결 2] 가상 환경 크래시를 막기 위해 -no-sandbox 플래그를 확실하게 주입합니다.
+          katana -u "$TARGET_URL" \
             -c 1 \
             -rl 3 \
             -rd 2 \
@@ -59,6 +57,7 @@ jobs:
             -cs "$HOSTNAME" \
             -sc \
             -headless \
+            -no-sandbox \
             -v \
             -jc \
             -jsonl \
@@ -66,7 +65,7 @@ jobs:
           
           KATANA_PID=$!
           
-          echo "⏳ [VM-${{ matrix.index }}] 호스트 지정형 헤드리스 스캔 시작 (PID: $KATANA_PID)"
+          echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 헤드리스 스캔 시작 (PID: $KATANA_PID)"
           
           # 2. 30초마다 수집 상황 모니터링 로그 출력
           while kill -0 $KATANA_PID 2>/dev/null; do
@@ -75,7 +74,7 @@ jobs:
               CURRENT_COUNT=$(wc -l < katana_output.jsonl)
               echo "📊 [VM-${{ matrix.index }} 진행 상황] 현재까지 지정 호스트 내부에서 ${CURRENT_COUNT}개의 엔드포인트 수집..."
             else
-              echo "📊 [VM-${{ matrix.index }} 진행 상황] 브라우저 엔진 시동 및 페이지 로딩 중..."
+              echo "📊 [VM-${{ matrix.index }} 진행 상황] 브라우저 시동 및 DOM 렌더링 중..."
             fi
           done
           
@@ -157,7 +156,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: multipart/form-data" \
                  -F "file=@katana_multi_scan_report.xlsx" \
-                 -F "payload_json={\"content\": \"🚀 **지정 호스트 한정 병렬 Katana 헤드리스 스캔 완료!** 다른 서브도메인을 제외한 통합 엑셀 파일입니다.\"}" \
+                 -F "payload_json={\"content\": \"🚀 **호스트 한정 병렬 Katana 헤드리스 스캔 완료!** 가상 환경 제약을 모두 수정한 통합 엑셀 파일입니다.\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
