@@ -4,7 +4,6 @@ on:
   workflow_dispatch: 
 
 jobs:
-  # [1단계] Secrets에서 URL 개수를 파악하여 가상머신 번호 배열([0, 1, 2...])을 동적으로 생성
   setup-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -16,7 +15,6 @@ jobs:
           JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
-  # [2단계] 최대 20대의 가상머신을 동시에 띄워 헤드리스 스텔스 고속 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
@@ -52,7 +50,7 @@ jobs:
           touch katana_output.jsonl
           touch clean_stream.log
           
-          # 1. Katana 고속 스캔 백그라운드 구동
+          # 1. Katana 고속 스캔 백그라운드 구동 (-d 3 스펙 고정 유지)
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
@@ -71,24 +69,32 @@ jobs:
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
           
-          # 2. 🔥 실시간 파싱 단에 Depth(깊이) 추적 로직 적용 (백그라운드)
+          # 2. 🔥 [버그 전면 수정] Depth 멀티 정규식 판별 가공 스크립트 엔진
           tail -f -n +1 katana_verbose.log 2>/dev/null | while read -r vline; do
             CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
             
-            # 🔥 로그 데이터 내부에서 "depth":1 또는 2 값을 실시간 추출 (없으면 기본값 1 처리)
+            # Katana 원본 verbose JSON 안에 들어있는 "depth":X 값을 유연하게 가로챕니다.
             V_DEPTH=$(echo "$vline" | sed -n 's/.*"depth":\([0-9]\).*/\1/p')
+            
+            # 만약 JSON에 depth 속성이 없다면 가공되지 않은 쌩 로그 텍스트를 검문하여 매핑합니다.
             if [ -z "$V_DEPTH" ]; then
-              if echo "$vline" | grep -q "Sending request to"; then
+              if echo "$vline" | grep -q '"depth":3'; then
+                V_DEPTH="3"
+              elif echo "$vline" | grep -q '"depth":1'; then
                 V_DEPTH="1"
+              elif echo "$vline" | grep -q "Sending request to"; then
+                V_DEPTH="1"
+              elif echo "$vline" | grep -q '"depth":2'; then
+                V_DEPTH="2"
               else
+                # 기본값 디폴팅 우회 처리
                 V_DEPTH="2"
               fi
             fi
             
             if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-              # 주소와 깊이 값을 결합하여 임시 버퍼에 누적 저장
               echo "${V_DEPTH}||${CLEAN_URL}" >> clean_stream.log
             fi
           done &
@@ -107,7 +113,6 @@ jobs:
             if [ -f clean_stream.log ]; then
               CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
               
-              # 🔥 새롭게 수집된 데이터의 껍질을 벗겨 [Depth] 태그를 붙여서 출력
               tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r stream_line; do
                 PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
                 PARSE_URL=$(echo "$stream_line" | cut -d'|' -f3-)
@@ -134,7 +139,6 @@ jobs:
             fi
           done
           
-          # 스트리밍 잔여 프로세서 자원 청소
           kill -9 $STREAM_PID 2>/dev/null || true
           wait $KATANA_PID 2>/dev/null || true
           
@@ -142,7 +146,6 @@ jobs:
           [ -z "$FINAL_COUNT" ] && FINAL_COUNT=0
           echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집 완료: ${FINAL_COUNT}개"
           
-          # 긴급 진단 엔진
           if [ "$FINAL_COUNT" -eq 0 ]; then
             echo "===================================================="
             echo "🚨 [VM-${{ matrix.index }} 오류 발생] 수집된 결과가 0개입니다. 아래 원본 로그를 확인하세요:"
@@ -165,7 +168,6 @@ jobs:
           path: katana_output_${{ matrix.index }}.zip
           retention-days: 1
 
-  # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
     if: always()
