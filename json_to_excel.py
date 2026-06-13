@@ -30,7 +30,7 @@ jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
 if jsonl_files:
     for file_path in jsonl_files:
-        # 🔥 [Bug Fix]: errors='ignore' 속성을 주입하여 한글 깨짐 바이트가 들어와도 크래시 없이 패스하도록 방어막 구축!
+        # errors='ignore' 주입으로 유니코드 깨짐 크래시 원천 차단
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_str = line.strip()
@@ -55,7 +55,7 @@ if jsonl_files:
                             method = obj.get('method', 'GET')
                             
                         timestamp = obj.get('timestamp', '')
-                        source = obj.get('source', '')
+                        source = obj.get('source', '')  # Katana 원본의 소스(출처) 데이터 매핑
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
                 except Exception:
@@ -85,7 +85,7 @@ if jsonl_files:
                     '찾은 시간 (Timestamp)': timestamp,
                     '요청 메서드 (Method)': method,
                     '발견된 URL (URL)': url_str,
-                    '출처 페이지 (Source)': source,
+                    '출처 페이지 (Source)': source,  # 데이터프레임 컬럼 정상 활성화
                     'HTML 태그 (Tag)': tag,
                     '속성 (Attribute)': attribute
                 }
@@ -133,8 +133,8 @@ if data:
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        # 1) 초경량 상단 대시보드 복귀 단추 배너 주입
-        ws_domain.merge_cells("A1:G1")
+        # 1) 초경량 상단 대시보드 복귀 단추 배너 주입 (A1~H1 병합으로 스펙 업)
+        ws_domain.merge_cells("A1:H1")
         back_btn = ws_domain["A1"]
         back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
         back_btn.hyperlink = "#'대시보드'!A1"
@@ -143,7 +143,7 @@ if data:
         back_btn.alignment = center_alignment
         ws_domain.row_dimensions[1].height = 26
         
-        # 2) 소스 서브셋 이식
+        # 2) 소스 데이터 이식
         domain_subset = df[df['대상 타겟 (Target)'] == domain]
         headers = list(df.columns)
         ws_domain.append(headers)
@@ -151,7 +151,7 @@ if data:
         for r in dataframe_to_rows(domain_subset, index=False, header=False):
             ws_domain.append(r)
             
-        # 데이터 탭 테이블 헤더 서식 지정
+        # 데이터 탭 테이블 헤더 서식 지정 (2행)
         for cell in ws_domain[2]:
             cell.font = header_font
             cell.fill = header_fill
@@ -162,12 +162,17 @@ if data:
         for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
             for cell in row:
                 cell.font = data_font
+                # 가독성 설계: 타겟, 시간, 메서드, 태그, 속성은 가운데 정렬 / 발견 URL과 출처(Source)는 왼쪽 정렬
                 if cell.column in [1, 2, 3, 6, 7]:
                     cell.alignment = center_alignment
                 else:
                     cell.alignment = left_alignment
                     
-        # 열 너비 수동 연산 (MergedCell 충돌 방어 완료)
+                # 긴 긴 URL 텍스트 가독성을 위해 셀 내부 줄바꿈 허용 세팅 보강
+                if cell.column in [4, 5]:
+                    cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+                    
+        # 열 너비 수동 연산 (병합 크래시 우회 엔진 고정)
         for col_idx in range(1, len(headers) + 1):
             max_len = 0
             for row_idx in range(2, ws_domain.max_row + 1):
@@ -175,7 +180,11 @@ if data:
                 if len(val) > max_len:
                     max_len = len(val)
             col_letter = get_column_letter(col_idx)
-            ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
+            # URL과 출처 페이지 열은 데이터가 길기 때문에 너비를 넉넉하게 보정
+            if col_idx in [4, 5]:
+                ws_domain.column_dimensions[col_letter].width = max(max_len + 4, 35)
+            else:
+                ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
             
         # 3) 대시보드 데이터 채우기 및 완벽 정중앙 정렬
         current_domain_count = len(domain_subset)
@@ -221,4 +230,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [총합 추가 세이브 완료] 대시보드 총합 행 빌드 완수: {excel_file}")
+print(f"🏁 [출처 표기 완료] 대시보드 총합 및 소스 맵 연동 완료: {excel_file}")
