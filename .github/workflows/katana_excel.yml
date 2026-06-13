@@ -40,7 +40,6 @@ jobs:
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 현재 가상머신의 고유 번호 (0 ~ 19)
           VM_IDX=${{ matrix.index }}
           
           TOTAL_TARGETS=()
@@ -72,14 +71,14 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # 🔥 [문법 오류 100% 해결] 존재하지 않거나 중복된 플래그(-ex, -sc, -rd)를 전부 제거하고,
-            # Katana 공식 규격인 -ef (Extension Filter), -jc (JS Crawl), -aff (Auto Form Fill) 로 깔끔하게 최적화했습니다.
+            # 🔥 [비장의 무기 추가] -kf all 옵션을 넣어 robots.txt, sitemap.xml 등 숨겨진 지도까지 싹 뒤집니다!
             katana -u "$TARGET_URL" \
               -c 2 \
               -rl 4 \
               -d 3 \
               -jc \
               -aff \
+              -kf all \
               -strategy depth-first \
               -ef "jpg,jpeg,png,gif,css,woff,woff2,svg,ico,ttf,eot,mp4,avi,mp3" \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
@@ -99,7 +98,6 @@ jobs:
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
-              # 여백에 상관없이 depth 숫자만 추출
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
               
               if [ -z "$V_DEPTH" ] || ! [[ "$V_DEPTH" =~ ^[1-3]$ ]]; then
@@ -138,9 +136,10 @@ jobs:
               
               if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
-                if [ "$IDLE_LOOPS" -ge 15 ]; then
+                # 🔥 타이머를 30초로 대폭 늘려 무거운 자바스크립트를 끝까지 해석하도록 시간을 벌어줍니다.
+                if [ "$IDLE_LOOPS" -ge 30 ]; then
                   echo "===================================================="
-                  echo "⚠️ [15초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 즉시 이동합니다."
+                  echo "⚠️ [30초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 즉시 이동합니다."
                   echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
@@ -240,7 +239,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 균등 배정 완료 및 고가독성 하이퍼링크 대시보드 엑셀 병합 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 완료 (30초 딥렌더링 엔진 적용)!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
