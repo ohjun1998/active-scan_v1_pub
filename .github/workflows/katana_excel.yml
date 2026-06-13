@@ -21,7 +21,6 @@ jobs:
     needs: setup-matrix
     runs-on: ubuntu-latest
     strategy:
-      # 🔥 [문법 에러 해결] 오타가 났던 matrix 구문을 올바른 표준 YAML 문법으로 전면 교정 완료!
       matrix:
         index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
       max-parallel: 20
@@ -43,25 +42,24 @@ jobs:
       - name: Katana 개별 헤드리스 스캔 & 실시간 로그 모니터링
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
-          
-          # 도메인 호스트명 발라내기
           HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
-          # 브라우저 샌드박스 우회 보호 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 로그 파일 초기화
           touch katana_verbose.log
           touch katana_output.jsonl
+          touch clean_stream.log
           
-          # 1. Katana 고속 스캔 실행 (백그라운드 구동)
+          # 1. Katana 고속 스캔 백그라운드 구동
+          # 🔥 [핵심 옵션 교체] -fs fqdn 플래그를 주입하여 타 서브도메인/외부 주소를 수집 단계부터 원천 컷트합니다!
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
             -rd 1 \
             -d 2 \
+            -fs fqdn \
             -cs "$HOSTNAME" \
             -sc \
             -headless \
@@ -74,41 +72,62 @@ jobs:
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
           
-          # 2. [실시간 1발씩 스트리밍 엔진]
-          CURRENT_REQ=0
-          tail -f --pid=$KATANA_PID -n +1 katana_verbose.log | while read -r vline; do
-            # JSON 로그에서 엔드포인트 주소 정밀 추출
+          # 2. 실시간 파싱 및 가공 데이터를 별도 임시 로그에 누적 (백그라운드)
+          tail -f -n +1 katana_verbose.log 2>/dev/null | while read -r vline; do
             CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
             
-            # 주소가 정상적으로 추출되었을 때만 화면에 즉시 한 줄 출력
             if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-              CURRENT_REQ=$((CURRENT_REQ + 1))
-              TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+              echo "$CLEAN_URL" >> clean_stream.log
+            fi
+          done &
+          STREAM_PID=$!
+          
+          # 3. 지능형 5초 강제 킬러 타이머 엔진
+          LAST_STREAM_COUNT=0
+          IDLE_LOOPS=0
+          
+          while kill -0 $KATANA_PID 2>/dev/null; do
+            sleep 1
+            
+            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+            [ -z "$TOTAL_COUNT" ] && TOTAL_COUNT=0
+            
+            if [ -f clean_stream.log ]; then
+              CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
               
-              if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" -eq 0 ]; then
-                TOTAL_DISPLAY="?"
-              else
-                TOTAL_DISPLAY="$TOTAL_COUNT"
+              # 새롭게 인양된 URL만 포그라운드 로그창에 실시간 토스
+              tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r url_line; do
+                echo "[${CURRENT_REQ}/${TOTAL_COUNT}] ➡️ ${url_line}"
+              done
+              LAST_STREAM_COUNT=$CURRENT_REQ
+            else
+              CURRENT_REQ=0
+            fi
+            
+            # 5초 타임아웃 밸런서
+            if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
+              IDLE_LOOPS=$((IDLE_LOOPS + 1))
+              if [ "$IDLE_LOOPS" -ge 5 ]; then
+                echo "===================================================="
+                echo "⚠️ [5초 타임아웃 보호장치 발동] 금융 보안 모듈 데드락이 감지되었습니다."
+                echo "⚠️ 데이터 수집([${CURRENT_REQ}/${TOTAL_COUNT}])이 이미 끝났으므로 5초 규칙에 의거, 즉시 프로세스를 자르고 엑셀 단계로 안전 이양합니다."
+                echo "===================================================="
+                kill -9 $KATANA_PID 2>/dev/null || true
+                break
               fi
-              
-              # 30초 대기 없이 주소 탐색될 때마다 실시간으로 1줄씩 쏴줍니다.
-              echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] ➡️ $CLEAN_URL"
+            else
+              IDLE_LOOPS=0
             fi
           done
           
-          wait $KATANA_PID
-          EXIT_CODE=$?
+          # 스트리밍 잔여 프로세서 자원 청소
+          kill -9 $STREAM_PID 2>/dev/null || true
+          wait $KATANA_PID 2>/dev/null || true
           
-          # 3. 파일 안정성 검사 및 빈 파일 처리
-          if [ -f katana_output.jsonl ]; then
-            FINAL_COUNT=$(wc -l < katana_output.jsonl)
-          else
-            FINAL_COUNT=0
-            touch katana_output.jsonl
-          fi
-          echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집: ${FINAL_COUNT}개"
+          FINAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]')
+          echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집 완료: ${FINAL_COUNT}개"
 
       - name: 결과물 비밀번호 압축 암호화 (특수문자 차단 우회 보호)
         env:
