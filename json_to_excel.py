@@ -2,7 +2,7 @@ import json
 import os
 import glob
 import re
-from urllib.parse import urlparse, urljoin  # 🔥 절대경로 변환을 위한 라이브러리 추가
+from urllib.parse import urlparse, urljoin
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -38,7 +38,6 @@ if jsonl_files:
                     continue
                     
                 url_str = ""
-                timestamp = ""
                 method = "GET"
                 source = ""
                 tag = ""
@@ -56,7 +55,6 @@ if jsonl_files:
                             method = obj.get('method', 'GET')
                             source = obj.get('source_url') or obj.get('source', '')
                             
-                        timestamp = obj.get('timestamp', '')
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
                         
@@ -71,12 +69,11 @@ if jsonl_files:
                 if not url_str:
                     continue
                 
-                # 🔥 [핵심 로직] 추출된 url이 상대경로(/a/b/c)일 경우 출처(Source)의 도메인을 붙여 절대경로로 조립!
+                # 상대경로일 경우 출처(Source)의 도메인을 붙여 절대경로로 조립
                 if not url_str.startswith('http'):
                     if source and source.startswith('http'):
                         url_str = urljoin(source, url_str)
                 
-                # urlparse를 사용하여 깔끔하게 대상 도메인(Target) 추출
                 target_source = "Unknown"
                 try:
                     parsed_url = urlparse(url_str)
@@ -99,9 +96,9 @@ if jsonl_files:
                     if clean_src.rstrip('/') != url_str.rstrip('/'):
                         final_source = clean_src
                     
+                # 찾은 시간(Timestamp) 속성 완전 제거
                 row = {
                     '대상 타겟 (Target)': target_source,
-                    '찾은 시간 (Timestamp)': timestamp,
                     '요청 메서드 (Method)': method,
                     '발견된 URL (URL)': url_str,
                     '출처 페이지 (Source)': final_source,
@@ -116,8 +113,8 @@ if data:
     df = df.sort_values(by=['대상 타겟 (Target)', '발견된 URL (URL)'], ascending=[False, True])
     print(f"🟢 [필터링 완료] 총 {len(data)}개의 순정 타겟 엔드포인트가 엑셀에 매핑되었습니다!")
 else:
-    df = pd.DataFrame(columns=['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
-    df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', '']
+    df = pd.DataFrame(columns=['대상 타겟 (Target)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
+    df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '']
 
 # --- 📊 엑셀 엔진 레이아웃 빌드 조립 단 ---
 wb = Workbook()
@@ -130,7 +127,6 @@ data_font = Font(name=font_family, size=10)
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
 
-# A. 대시보드
 ws_dashboard = wb.active
 ws_dashboard.title = "대시보드"
 ws_dashboard.append(["대상 타겟 도메인 (Target Domain)", "수집된 고유 URL 개수", "상세 페이지 바로가기"])
@@ -151,7 +147,8 @@ if data:
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        ws_domain.merge_cells("A1:H1")
+        # 6개 열 구조에 맞춘 병합
+        ws_domain.merge_cells("A1:F1")
         back_btn = ws_domain["A1"]
         back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
         back_btn.hyperlink = "#'대시보드'!A1"
@@ -176,12 +173,13 @@ if data:
         for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
             for cell in row:
                 cell.font = data_font
-                if cell.column in [1, 2, 3, 6, 7]:
+                # 시간 열 제외로 인한 정렬 인덱스 보정
+                if cell.column in [1, 2, 5, 6]:
                     cell.alignment = center_alignment
                 else:
                     cell.alignment = left_alignment
                     
-                if cell.column in [4, 5]:
+                if cell.column in [3, 4]:
                     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                     
         for col_idx in range(1, len(headers) + 1):
@@ -191,7 +189,7 @@ if data:
                 if len(val) > max_len:
                     max_len = len(val)
             col_letter = get_column_letter(col_idx)
-            if col_idx in [4, 5]:
+            if col_idx in [3, 4]:
                 ws_domain.column_dimensions[col_letter].width = max(max_len + 4, 35)
             else:
                 ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
@@ -227,7 +225,7 @@ if data:
 else:
     ws_empty = wb.create_sheet(title="결과 없음")
     ws_empty.append(list(df.columns))
-    ws_empty.append(['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', ''])
+    ws_empty.append(['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', ''])
     
     ws_dashboard.cell(row=2, column=1, value="N/A").alignment = center_alignment
     ws_dashboard.cell(row=2, column=2, value=0).alignment = center_alignment
@@ -238,4 +236,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [상대경로 보정 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [시간 항목 제거 완료] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
