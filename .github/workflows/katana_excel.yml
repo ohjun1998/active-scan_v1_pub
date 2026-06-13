@@ -71,19 +71,30 @@ jobs:
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
           
-          # 2. 실시간 파싱 및 가공 데이터를 별도 임시 로그에 누적 (백그라운드)
+          # 2. 🔥 실시간 파싱 단에 Depth(깊이) 추적 로직 적용 (백그라운드)
           tail -f -n +1 katana_verbose.log 2>/dev/null | while read -r vline; do
             CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
             [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
             
+            # 🔥 로그 데이터 내부에서 "depth":1 또는 2 값을 실시간 추출 (없으면 기본값 1 처리)
+            V_DEPTH=$(echo "$vline" | sed -n 's/.*"depth":\([0-9]\).*/\1/p')
+            if [ -z "$V_DEPTH" ]; then
+              if echo "$vline" | grep -q "Sending request to"; then
+                V_DEPTH="1"
+              else
+                V_DEPTH="2"
+              fi
+            fi
+            
             if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-              echo "$CLEAN_URL" >> clean_stream.log
+              # 주소와 깊이 값을 결합하여 임시 버퍼에 누적 저장
+              echo "${V_DEPTH}||${CLEAN_URL}" >> clean_stream.log
             fi
           done &
           STREAM_PID=$!
           
-          # 3. 지능형 5초 강제 킬러 타이머 엔진
+          # 3. 지능형 5초 강제 킬러 타이머 엔진 및 정밀 스트리머
           LAST_STREAM_COUNT=0
           IDLE_LOOPS=0
           
@@ -96,9 +107,12 @@ jobs:
             if [ -f clean_stream.log ]; then
               CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
               
-              # 새롭게 인양된 URL만 포그라운드 로그창에 실시간 토스
-              tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r url_line; do
-                echo "[${CURRENT_REQ}/${TOTAL_COUNT}] ➡️ ${url_line}"
+              # 🔥 새롭게 수집된 데이터의 껍질을 벗겨 [Depth] 태그를 붙여서 출력
+              tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r stream_line; do
+                PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
+                PARSE_URL=$(echo "$stream_line" | cut -d'|' -f3-)
+                
+                echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] ➡️ ${PARSE_URL}"
               done
               LAST_STREAM_COUNT=$CURRENT_REQ
             else
@@ -128,7 +142,7 @@ jobs:
           [ -z "$FINAL_COUNT" ] && FINAL_COUNT=0
           echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집 완료: ${FINAL_COUNT}개"
           
-          # 🔥 [긴급 진단 엔진 복원] 0개로 실패 시 Katana가 숨긴 원본 에러를 강제로 화면에 뱉어냅니다!
+          # 긴급 진단 엔진
           if [ "$FINAL_COUNT" -eq 0 ]; then
             echo "===================================================="
             echo "🚨 [VM-${{ matrix.index }} 오류 발생] 수집된 결과가 0개입니다. 아래 원본 로그를 확인하세요:"
@@ -190,7 +204,7 @@ jobs:
             done
           fi
 
-      - name: 파이썬 스크립트로 단일 엑셀 변환 (★TARGET_URLS 환경변수 연동)
+      - name: 파이썬 스크립트로 단일 엑셀 변환 (TARGET_URLS 환경변수 연동)
         env:
           TARGET_URLS: ${{ secrets.TARGET_URLS }}
         run: python json_to_excel.py
