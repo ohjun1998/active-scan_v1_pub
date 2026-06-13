@@ -46,24 +46,24 @@ if jsonl_files:
                 try:
                     obj = json.loads(line_str)
                     if isinstance(obj, dict):
+                        # 🔥 [완벽 수정] Katana v1.6.1 JSON 규격에 맞게 'request' 내부의 'endpoint'와 'source'를 정확히 타겟팅!
                         if 'request' in obj and isinstance(obj['request'], dict):
-                            url_str = obj['request'].get('url', '')
+                            url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
                             method = obj['request'].get('method', 'GET')
+                            source = obj['request'].get('source') or obj.get('source_url') or obj.get('source', '')
                         else:
-                            url_str = obj.get('url', '')
+                            url_str = obj.get('endpoint') or obj.get('url', '')
                             method = obj.get('method', 'GET')
+                            source = obj.get('source_url') or obj.get('source', '')
                             
                         timestamp = obj.get('timestamp', '')
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
                         
-                        # 🔥 [출처 추적 다중 방어선 주입]
-                        # 1순위: source_url -> 2순위: referrer -> 3순위: source 순으로 뒤져서 진짜 부모 페이지를 찾아냅니다.
-                        source = obj.get('source_url') or obj.get('referrer') or obj.get('source', '')
-                        
                 except Exception:
                     pass
 
+                # 정규식을 통한 최후의 URL 추출 방어선
                 if not url_str:
                     url_match = re.search(r'(https?://[^\s"\'},]+)', line_str)
                     if url_match:
@@ -83,8 +83,8 @@ if jsonl_files:
                 if target_source not in allowed_domains:
                     continue
                 
-                # 🔥 추출된 부모 URL이 타겟 URL 자체와 완전 같다면 대문 진입으로 세팅, 다르면 진짜 상위 페이지 주소를 보존합니다.
-                final_source = "시작 랜딩 페이지(Depth 1)"
+                # 🔥 추출된 부모 URL(Source)이 최종 URL과 같다면 대문 진입, 다르면 진짜 출처 보존!
+                final_source = "시작 랜딩 페이지(Direct)"
                 if source and source.strip():
                     clean_src = source.strip()
                     if clean_src.rstrip('/') != url_str.rstrip('/'):
@@ -110,7 +110,7 @@ else:
     df = pd.DataFrame(columns=['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
     df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', '']
 
-# --- 📊 엑셀 구조 디자인 단 ---
+# --- 📊 엑셀 엔진 레이아웃 빌드 조립 단 ---
 wb = Workbook()
 
 font_family = 'Malgun Gothic'
@@ -229,4 +229,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [상위 부모 추적 연동 완료] 엑셀 세이브 완료: {excel_file}")
+print(f"🏁 [출처 반영 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
