@@ -43,17 +43,15 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
-          # 프로토콜(http/https) 유무나 패스 명에 상관없이 도메인 호스트명만 완벽하게 싹 발라냅니다.
+          # 도메인 호스트명 발라내기
           HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
-          # Katana 브라우저 내부 엔진(go-rod)에 샌드박스 무력화 플래그를 강제로 주입합니다.
+          # 브라우저 샌드박스 크래시 차단 우회 보호
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
-          
-          # Ubuntu 24.04 러너 커널의 브라우저 네임스페이스 차단 정책을 임시 해제합니다.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 1. Katana 스캔을 백그라운드로 실행 (고속 스캔 -d 2 설정)
+          # 1. Katana 고속 스캔 실행 (백그라운드)
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
@@ -70,13 +68,34 @@ jobs:
           KATANA_PID=$!
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           
-          # 2. 30초마다 수집 상황 모니터링 로그 출력
+          # 2. 🔥 [실시간 실시간 카운터 및 로그 결합 가동]
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
-            if [ -f katana_output.jsonl ]; then
-              CURRENT_COUNT=$(wc -l < katana_output.jsonl)
-              echo "📊 [VM-${{ matrix.index }} 진행 상황] 현재까지 지정 호스트 내부에서 ${CURRENT_COUNT}개의 엔드포인트 수집..."
+            echo "===================================================="
+            
+            # 📊 분모 계산: 현재 기입된 고유 엔드포인트 총량
+            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null || echo 0)
+            
+            # 🎯 분자 계산: Katana verbose 로그에서 실제 발송한 HTTP 요청 수 카운트
+            CURRENT_REQ=$(grep -c "Sending request to" katana_verbose.log 2>/dev/null || echo 0)
+            
+            # 스캔 초기 진입 단계 분모 방어 처리
+            if [ "$TOTAL_COUNT" -eq 0 ]; then
+              TOTAL_DISPLAY="?"
+            else
+              TOTAL_DISPLAY="$TOTAL_COUNT"
             fi
+            
+            echo "📊 [VM-${{ matrix.index }} 진행률] 실시간 검사 상태: [${CURRENT_REQ}/${TOTAL_DISPLAY}]"
+            
+            # verbose 로그의 마지막 4줄 앞에 실시간 카운터를 조립해서 출력합니다.
+            if [ -f katana_verbose.log ]; then
+              echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 중인 로그]"
+              tail -n 4 katana_verbose.log | while read -r vline; do
+                echo "[${CURRENT_REQ}/${TOTAL_DISPLAY}] $vline"
+              done
+            fi
+            echo "===================================================="
           done
           
           wait $KATANA_PID
@@ -90,9 +109,8 @@ jobs:
             touch katana_output.jsonl
           fi
           
-          # 0개이거나 실패 시 상세 원인을 로그에 강제로 뱉어냅니다.
           if [ $FINAL_COUNT -eq 0 ] || [ $EXIT_CODE -ne 0 ]; then
-            echo "🚨 [VM-${{ matrix.index }} 원인 분석] 수집 결과가 없거나 에러가 났습니다. 아래 상세 로그를 확인하세요:"
+            echo "🚨 [VM-${{ matrix.index }} 원인 분석] 상세 로그 확인:"
             echo "----------------------------------------------------"
             cat katana_verbose.log
             echo "----------------------------------------------------"
@@ -106,7 +124,6 @@ jobs:
         run: |
           zip -P "$ZIP_PWD" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
-      # 🔥 [중복 해결 완료] 문법 에러가 났던 uses 적층 버그를 깔끔하게 지웠습니다.
       - name: 임시 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
@@ -170,7 +187,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **지정 대상 필터링 완료! 병렬 Katana 스캔 보고서** \n\n네이버, 인스타 등 불필요한 외부 도메인을 완벽히 제거한 순정 엑셀 파일입니다. 아래 링크 하단 'Artifacts'에서 받으세요! \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **정밀 고속 스캔 및 내림차순 가독성 엑셀 변환 완료!** \n\n아래 링크 페이지 최하단 'Artifacts'에서 결과 보고서를 안전하게 내려받으세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
