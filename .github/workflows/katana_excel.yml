@@ -36,7 +36,6 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
-          # 샌드박스 크래시 방어 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
@@ -71,7 +70,6 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # 🔥 [비장의 무기 추가] -kf all 옵션을 넣어 robots.txt, sitemap.xml 등 숨겨진 지도까지 싹 뒤집니다!
             katana -u "$TARGET_URL" \
               -c 2 \
               -rl 4 \
@@ -92,11 +90,15 @@ jobs:
             
             KATANA_PID=$!
             
-            # 실시간 스트리밍 분석 단
+            # 🔥 [실시간 파이프라인 개조]: 출처 주소("source_url") 필드가 유실되지 않도록 
+            # 정규식 수집 버퍼 구조를 3중 연동 파이프로 전면 개편하여 clean_stream.log에 온전히 보존합니다.
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
+              
+              SRC_URL=$(echo "$vline" | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')
+              [ -z "$SRC_URL" ] && SRC_URL="Direct 랜딩 진입"
               
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
               
@@ -109,7 +111,8 @@ jobs:
               fi
               
               if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-                echo "${V_DEPTH}||${CLEAN_URL}" >> clean_stream.log
+                # 깊이||출처||발견URL 구도로 안전 이송
+                echo "${V_DEPTH}||${SRC_URL}||${CLEAN_URL}" >> clean_stream.log
               fi
             done &
             STREAM_PID=$!
@@ -126,8 +129,10 @@ jobs:
                 CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
                 tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r stream_line; do
                   PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
-                  PARSE_URL=$(echo "$stream_line" | cut -d'|' -f3-)
-                  echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] ➡️ ${PARSE_URL}"
+                  PARSE_SRC=$(echo "$stream_line" | cut -d'|' -f3)
+                  PARSE_URL=$(echo "$stream_line" | cut -d'|' -f5-)
+                  # 실시간 로그창에도 어떤 파일에서 파생된 건지 시각화 출력 연동
+                  echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] [출처: ${PARSE_SRC}] ➡️ ${PARSE_URL}"
                 done
                 LAST_STREAM_COUNT=$CURRENT_REQ
               else
@@ -136,7 +141,6 @@ jobs:
               
               if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
-                # 🔥 타이머를 30초로 대폭 늘려 무거운 자바스크립트를 끝까지 해석하도록 시간을 벌어줍니다.
                 if [ "$IDLE_LOOPS" -ge 30 ]; then
                   echo "===================================================="
                   echo "⚠️ [30초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 즉시 이동합니다."
@@ -154,13 +158,6 @@ jobs:
             
             if [ -f temp_output.jsonl ]; then
               cat temp_output.jsonl >> katana_output.jsonl
-            fi
-            
-            # 진단 dumper
-            CHK_CNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
-            if [ "$CHK_CNT" -eq 0 ] && [ -f temp_verbose.log ]; then
-              echo "❌ [VM-$VM_IDX 스캔 실패 분석 원본 로그]"
-              head -n 20 temp_verbose.log || true
             fi
             
             rm -f temp_verbose.log temp_output.jsonl clean_stream.log
@@ -239,7 +236,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 완료 (30초 딥렌더링 엔진 적용)!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 완료 및 출처 추적 엑셀 맵 변환 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
