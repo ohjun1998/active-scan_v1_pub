@@ -70,13 +70,14 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
+            # 🔥 [-jsl 옵션 추가] jsluice 엔진을 켜서 JS 파일 내부의 난독화/조합형 엔드포인트를 강력하게 추출합니다!
             katana -u "$TARGET_URL" \
               -c 2 \
               -rl 4 \
               -d 3 \
               -jc \
+              -jsl \
               -aff \
-              -kf all \
               -strategy depth-first \
               -ef "jpg,jpeg,png,gif,css,woff,woff2,svg,ico,ttf,eot,mp4,avi,mp3" \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
@@ -90,8 +91,7 @@ jobs:
             
             KATANA_PID=$!
             
-            # 🔥 [실시간 파이프라인 개조]: 출처 주소("source_url") 필드가 유실되지 않도록 
-            # 정규식 수집 버퍼 구조를 3중 연동 파이프로 전면 개편하여 clean_stream.log에 온전히 보존합니다.
+            # 실시간 스트리밍 분석 단
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
@@ -111,7 +111,6 @@ jobs:
               fi
               
               if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-                # 깊이||출처||발견URL 구도로 안전 이송
                 echo "${V_DEPTH}||${SRC_URL}||${CLEAN_URL}" >> clean_stream.log
               fi
             done &
@@ -131,7 +130,6 @@ jobs:
                   PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
                   PARSE_SRC=$(echo "$stream_line" | cut -d'|' -f3)
                   PARSE_URL=$(echo "$stream_line" | cut -d'|' -f5-)
-                  # 실시간 로그창에도 어떤 파일에서 파생된 건지 시각화 출력 연동
                   echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] [출처: ${PARSE_SRC}] ➡️ ${PARSE_URL}"
                 done
                 LAST_STREAM_COUNT=$CURRENT_REQ
@@ -236,7 +234,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 완료 및 출처 추적 엑셀 맵 변환 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 (-jsl 딥크롤링 + 절대경로 자동 보정) 변환 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
