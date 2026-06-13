@@ -45,45 +45,38 @@ jobs:
           # 현재 가상머신의 고유 번호 (0 ~ 19)
           VM_IDX=${{ matrix.index }}
           
-          # 🔥 [버그 우회 해결] 문자열 폭파 현상을 막기 위해 히어스트링 대신 파이프라인 안전 적재 방식 채택
           TOTAL_TARGETS=()
           while list_line= read -r line || [ -n "$line" ]; do
             clean_line=$(echo "$line" | tr -d '\r' | xargs)
             if [ -n "$clean_line" ]; then
               TOTAL_TARGETS+=("$clean_line")
             fi
-          # Secrets 데이터를 안전하게 스트리밍으로 한 줄씩 밀어 넣음
           done << 'EOF'
           ${{ secrets.TARGET_URLS }}
           EOF
           
+          NUM_TARGETS=${{ '$\{#TOTAL_TARGETS\[@\]\}' }}
           NUM_TARGETS=${#TOTAL_TARGETS[@]}
           
           echo "📊 전체 타겟 개수: $NUM_TARGETS 개"
           echo "⚙️ 현재 가상머신 번호: VM-$VM_IDX"
           echo "===================================================="
           
-          # 통합 결과 파일 초기화
           touch katana_output.jsonl
           
-          # 지능형 배수 분배 알고리즘 작동 (VM-14는 14, 34, 54, 74, 94번째 도메인 타격)
+          # 지능형 20배수 순차 탐색 루프
           for (( i=$VM_IDX; i<$NUM_TARGETS; i+=20 )); do
             TARGET_URL="${TOTAL_TARGETS[$i]}"
-            
-            # 마스킹 처리 (보안)
             echo "::add-mask::$TARGET_URL"
             
-            # 호스트명 추출
             HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
-            
             echo "🚀 [VM-$VM_IDX] 현재 타겟 스캔 시작: $TARGET_URL (정규식: $HOSTNAME)"
             
-            # 임시 개별 로그 초기화
             touch temp_verbose.log
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # Katana 스캔 백그라운드 구동
+            # Katana 고속 스캔 실행
             katana -u "$TARGET_URL" \
               -c 2 \
               -rl 5 \
@@ -100,19 +93,20 @@ jobs:
             
             KATANA_PID=$!
             
-            # 실시간 파싱 및 Depth(깊이) 추적 로직 (백그라운드)
+            # 🔥 [버그 대수리] 실시간 스트리밍 분석 시 버퍼 오류를 막기 위해 구조적 정규식 파싱 적용
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
-              V_DEPTH=$(echo "$vline" | sed -n 's/.*"depth":\([0-9]\).*/\1/p')
+              # 문자열 내부에 박힌 depth 필드를 하드코딩 없이 유연하게 가로챕니다.
+              V_DEPTH=$(echo "$vline" | grep -o '"depth":[0-9]' | cut -d':' -f2)
               if [ -z "$V_DEPTH" ]; then
-                if echo "$vline" | grep -q '"depth":3'; then V_DEPTH="3"
-                elif echo "$vline" | grep -q '"depth":1'; then V_DEPTH="1"
-                elif echo "$vline" | grep -q "Sending request to"; then V_DEPTH="1"
-                elif echo "$vline" | grep -q '"depth":2'; then V_DEPTH="2"
-                else V_DEPTH="2"; fi
+                if echo "$vline" | grep -q "Sending request to"; then
+                  V_DEPTH="1"
+                else
+                  V_DEPTH="2"
+                fi
               fi
               
               if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
@@ -121,7 +115,6 @@ jobs:
             done &
             STREAM_PID=$!
             
-            # 지능형 5초 강제 킬러 타이머 엔진 및 정밀 스트리머
             LAST_STREAM_COUNT=0
             IDLE_LOOPS=0
             
@@ -142,7 +135,6 @@ jobs:
                 CURRENT_REQ=0
               fi
               
-              # 5초 타임아웃 밸런서
               if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
                 if [ "$IDLE_LOOPS" -ge 5 ]; then
@@ -157,7 +149,6 @@ jobs:
               fi
             done
             
-            # 자원 청소 및 데이터 누적 병합
             kill -9 $STREAM_PID 2>/dev/null || true
             wait $KATANA_PID 2>/dev/null || true
             
