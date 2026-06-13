@@ -42,18 +42,13 @@ jobs:
       - name: Katana 개별 헤드리스 스캔 & 실시간 로그 모니터링
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
-          
-          # 🔥 [해결책 1] 프로토콜(http/https) 유무나 패스 명에 상관없이 도메인 호스트명만 완벽하게 싹 발라냅니다. (공백 버그 해결)
           HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
-          # 🔥 [해결책 2] Katana 브라우저 내부 엔진(go-rod)에 샌드박스 무력화 플래그를 강제로 주입합니다.
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
-          
-          # 🔥 [해결책 3] Ubuntu 24.04 러너 커널의 브라우저 네임스페이스 차단 정책을 임시 해제합니다. (크래시 해결)
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          # 1. Katana 스캔을 백그라운드로 실행
+          # Katana 실행
           katana -u "$TARGET_URL" \
             -c 1 \
             -rl 3 \
@@ -68,10 +63,8 @@ jobs:
             -o katana_output.jsonl > katana_verbose.log 2>&1 &
           
           KATANA_PID=$!
-          
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 정밀 헤드리스 스캔 시작 (PID: $KATANA_PID)"
           
-          # 2. 30초마다 수집 상황 모니터링 로그 출력
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
             if [ -f katana_output.jsonl ]; then
@@ -85,7 +78,6 @@ jobs:
           wait $KATANA_PID
           EXIT_CODE=$?
           
-          # 3. 파일 안정성 검사 및 빈 파일 처리
           if [ -f katana_output.jsonl ]; then
             FINAL_COUNT=$(wc -l < katana_output.jsonl)
           else
@@ -93,7 +85,6 @@ jobs:
             touch katana_output.jsonl
           fi
           
-          # 0개이거나 실패 시 상세 원인을 로그에 강제로 뱉어냅니다.
           if [ $FINAL_COUNT -eq 0 ] || [ $EXIT_CODE -ne 0 ]; then
             echo "🚨 [VM-${{ matrix.index }} 원인 분석] 수집 결과가 없거나 에러가 났습니다. 아래 상세 로그를 확인하세요:"
             echo "----------------------------------------------------"
@@ -103,9 +94,12 @@ jobs:
             echo "🏁 [VM-${{ matrix.index }} 완료] 스캔 성공! (최종 수집: ${FINAL_COUNT}개)"
           fi
 
-      - name: 결과물 비밀번호 압축 암호화 (Public 노출 방지)
+      - name: 결과물 비밀번호 압축 암호화 (★특수문자 차단 우회 보호)
+        env:
+          ZIP_PWD: ${{ secrets.ARTIFACT_PASSWORD }}
         run: |
-          zip -P "${{ secrets.ARTIFACT_PASSWORD }}" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
+          # 비밀번호를 환경변수 $ZIP_PWD로 안전하게 넘겨 깨짐 현상을 원천 차단합니다.
+          zip -P "$ZIP_PWD" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
       - name: 임시 아티팩트 업로드
         uses: actions/upload-artifact@v4
@@ -138,15 +132,24 @@ jobs:
           path: encrypted_parts
           ignore-on-missing-artifact: true
 
-      - name: 비밀번호 해독 및 압축 해제
+      - name: 비밀번호 해독 및 압축 해제 (★안정성 로그 대폭 강화)
+        env:
+          ZIP_PWD: ${{ secrets.ARTIFACT_PASSWORD }}
         run: |
           mkdir -p katana_outputs
           if [ -d encrypted_parts ]; then
             find encrypted_parts -name "*.zip" | while read -r zipfile; do
-              unzip -P "${{ secrets.ARTIFACT_PASSWORD }}" -o "$zipfile" -d temp_unzip
+              echo "📦 [해독 시작] 파일 분석 중: $zipfile"
+              
+              # 환경변수를 사용해 특수문자가 섞인 암호도 완벽하게 해독합니다.
+              unzip -P "$ZIP_PWD" -o "$zipfile" -d temp_unzip
+              
               if [ -f temp_unzip/katana_output.jsonl ]; then
                 idx=$(basename "$zipfile" .zip | sed 's/katana_output_//')
                 mv temp_unzip/katana_output.jsonl "katana_outputs/part_${idx}.jsonl"
+                echo "🟢 [해독 성공] -> katana_outputs/part_${idx}.jsonl 매핑 완료"
+              else
+                echo "❌ [해독 실패] 비밀번호가 틀렸거나 압축 파일이 손상되었습니다: $zipfile"
               fi
               rm -rf temp_unzip
             done
