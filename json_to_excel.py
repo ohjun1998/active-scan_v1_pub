@@ -105,6 +105,7 @@ wb = Workbook()
 font_family = 'Malgun Gothic'
 header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid')
+total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid') # 총합 행을 위한 미색 그레이
 data_font = Font(name=font_family, size=10)
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
@@ -121,8 +122,11 @@ for cell in ws_dashboard[1]:
 ws_dashboard.row_dimensions[1].height = 24
 
 # B. 도메인 분할 이식 및 하이퍼링크 크로스를 통한 중앙정렬 연산
+total_url_count = 0
+
 if data:
     unique_domains = df['대상 타겟 (Target)'].unique()
+    last_row_idx = 1
     
     for idx, domain in enumerate(unique_domains, start=2):
         sheet_title = domain[:30]
@@ -162,10 +166,9 @@ if data:
                 else:
                     cell.alignment = left_alignment
                     
-        # 🔥 [Bug Fix 적용 단]: MergedCell 속성 크래시를 우회하는 열 너비 수동 연산
+        # 열 너비 수동 연산 (MergedCell 충돌 방어 완료)
         for col_idx in range(1, len(headers) + 1):
             max_len = 0
-            # 병합된 1행은 계산에서 완전 제외, 2행(헤더)부터 연산 진행
             for row_idx in range(2, ws_domain.max_row + 1):
                 val = str(ws_domain.cell(row=row_idx, column=col_idx).value or '')
                 if len(val) > max_len:
@@ -174,8 +177,11 @@ if data:
             ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
             
         # 3) 대시보드 데이터 채우기 및 완벽 정중앙 정렬
+        current_domain_count = len(domain_subset)
+        total_url_count += current_domain_count
+        
         ws_dashboard.cell(row=idx, column=1, value=domain).alignment = center_alignment
-        ws_dashboard.cell(row=idx, column=2, value=len(domain_subset)).alignment = center_alignment
+        ws_dashboard.cell(row=idx, column=2, value=current_domain_count).alignment = center_alignment
         
         link_cell = ws_dashboard.cell(row=idx, column=3, value="🔍 상세 내역 시트로 탭 이동")
         link_cell.hyperlink = f"#'{sheet_title}'!A2"
@@ -185,6 +191,20 @@ if data:
         ws_dashboard.row_dimensions[idx].height = 22
         ws_dashboard.cell(row=idx, column=1).font = data_font
         ws_dashboard.cell(row=idx, column=2).font = Font(name=font_family, size=10, bold=True)
+        last_row_idx = idx
+
+    # 🔥 [요청 사항] 대시보드 최하단에 전체 URL 총합 요약 행 주입
+    total_row_idx = last_row_idx + 1
+    ws_dashboard.cell(row=total_row_idx, column=1, value="📊 수집된 URL 총합 (Total)").alignment = center_alignment
+    ws_dashboard.cell(row=total_row_idx, column=1).font = Font(name=font_family, size=10, bold=True, color='FF0000')
+    ws_dashboard.cell(row=total_row_idx, column=1).fill = total_fill
+    
+    ws_dashboard.cell(row=total_row_idx, column=2, value=total_url_count).alignment = center_alignment
+    ws_dashboard.cell(row=total_row_idx, column=2).font = Font(name=font_family, size=11, bold=True, color='FF0000')
+    ws_dashboard.cell(row=total_row_idx, column=2).fill = total_fill
+    
+    ws_dashboard.cell(row=total_row_idx, column=3, value="").fill = total_fill
+    ws_dashboard.row_dimensions[total_row_idx].height = 24
 
 else:
     ws_empty = wb.create_sheet(title="결과 없음")
@@ -200,4 +220,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [리모델링 세이브 완료] 대시보드 정렬 및 복귀 배너 구성 완수: {excel_file}")
+print(f"🏁 [총합 추가 세이브 완료] 대시보드 총합 행 빌드 완수: {excel_file}")
