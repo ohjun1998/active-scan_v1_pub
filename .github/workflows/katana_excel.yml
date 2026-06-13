@@ -13,7 +13,6 @@ jobs:
       - name: 가상머신 20대 고정 인덱스 생성
         id: set-matrix
         run: |
-          # 0부터 19까지 총 20개의 숫자를 가진 JSON 배열 생성
           JSON_STRING=$(jq -n -c '[range(0; 20)]')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
@@ -46,8 +45,18 @@ jobs:
           # 현재 가상머신의 고유 번호 (0 ~ 19)
           VM_IDX=${{ matrix.index }}
           
-          # Secrets에서 전체 타겟 주소를 배열로 변환
-          IFS=$'\n' read -r -d '' -a TOTAL_TARGETS <<< "${{ secrets.TARGET_URLS }}"
+          # 🔥 [버그 우회 해결] 문자열 폭파 현상을 막기 위해 히어스트링 대신 파이프라인 안전 적재 방식 채택
+          TOTAL_TARGETS=()
+          while list_line= read -r line || [ -n "$line" ]; do
+            clean_line=$(echo "$line" | tr -d '\r' | xargs)
+            if [ -n "$clean_line" ]; then
+              TOTAL_TARGETS+=("$clean_line")
+            fi
+          # Secrets 데이터를 안전하게 스트리밍으로 한 줄씩 밀어 넣음
+          done << 'EOF'
+          ${{ secrets.TARGET_URLS }}
+          EOF
+          
           NUM_TARGETS=${#TOTAL_TARGETS[@]}
           
           echo "📊 전체 타겟 개수: $NUM_TARGETS 개"
@@ -57,14 +66,9 @@ jobs:
           # 통합 결과 파일 초기화
           touch katana_output.jsonl
           
-          # 🔥 [지능형 분배 로직] 20의 배수 배정 방식을 사용하여 97개 도메인을 20대에 균등 분할
-          # 예: VM-0은 0, 20, 40, 60, 80번째 타겟을 담당합니다.
+          # 지능형 배수 분배 알고리즘 작동 (VM-14는 14, 34, 54, 74, 94번째 도메인 타격)
           for (( i=$VM_IDX; i<$NUM_TARGETS; i+=20 )); do
             TARGET_URL="${TOTAL_TARGETS[$i]}"
-            TARGET_URL=$(echo "$TARGET_URL" | tr -d '\r' | xargs)
-            
-            # 빈 줄 예외 처리
-            [ -z "$TARGET_URL" ] && continue
             
             # 마스킹 처리 (보안)
             echo "::add-mask::$TARGET_URL"
@@ -96,7 +100,7 @@ jobs:
             
             KATANA_PID=$!
             
-            # 실시간 파싱 단에 Depth(깊이) 추적 로직 적용 (백그라운드)
+            # 실시간 파싱 및 Depth(깊이) 추적 로직 (백그라운드)
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
@@ -142,7 +146,9 @@ jobs:
               if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
                 if [ "$IDLE_LOOPS" -ge 5 ]; then
-                  echo "⚠️ [5초 보호장치] 금융 보안 모듈 데드락으로 인해 다음 타겟으로 조기 이동합니다."
+                  echo "===================================================="
+                  echo "⚠️ [5초 보호장치] 금융 보안 모듈 데드락 감지! 다음 타겟으로 즉시 이동합니다."
+                  echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
                 fi
@@ -159,7 +165,6 @@ jobs:
               cat temp_output.jsonl >> katana_output.jsonl
             fi
             
-            # 임시 파일 삭제하여 다음 타겟 준비
             rm -f temp_verbose.log temp_output.jsonl clean_stream.log
             echo "----------------------------------------------------"
           done
