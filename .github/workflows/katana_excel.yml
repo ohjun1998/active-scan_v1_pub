@@ -53,7 +53,6 @@ jobs:
           touch clean_stream.log
           
           # 1. Katana 고속 스캔 백그라운드 구동
-          # 🔥 [핵심 옵션 교체] -fs fqdn 플래그를 주입하여 타 서브도메인/외부 주소를 수집 단계부터 원천 컷트합니다!
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
@@ -112,7 +111,6 @@ jobs:
               if [ "$IDLE_LOOPS" -ge 5 ]; then
                 echo "===================================================="
                 echo "⚠️ [5초 타임아웃 보호장치 발동] 금융 보안 모듈 데드락이 감지되었습니다."
-                echo "⚠️ 데이터 수집([${CURRENT_REQ}/${TOTAL_COUNT}])이 이미 끝났으므로 5초 규칙에 의거, 즉시 프로세스를 자르고 엑셀 단계로 안전 이양합니다."
                 echo "===================================================="
                 kill -9 $KATANA_PID 2>/dev/null || true
                 break
@@ -127,7 +125,18 @@ jobs:
           wait $KATANA_PID 2>/dev/null || true
           
           FINAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]')
+          [ -z "$FINAL_COUNT" ] && FINAL_COUNT=0
           echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집 완료: ${FINAL_COUNT}개"
+          
+          # 🔥 [긴급 진단 엔진 복원] 0개로 실패 시 Katana가 숨긴 원본 에러를 강제로 화면에 뱉어냅니다!
+          if [ "$FINAL_COUNT" -eq 0 ]; then
+            echo "===================================================="
+            echo "🚨 [VM-${{ matrix.index }} 오류 발생] 수집된 결과가 0개입니다. 아래 원본 로그를 확인하세요:"
+            echo "----------------------------------------------------"
+            cat katana_verbose.log | tail -n 50
+            echo "----------------------------------------------------"
+            echo "===================================================="
+          fi
 
       - name: 결과물 비밀번호 압축 암호화 (특수문자 차단 우회 보호)
         env:
@@ -181,7 +190,7 @@ jobs:
             done
           fi
 
-      - name: 파이썬 스크립트로 단일 엑셀 변환 (TARGET_URLS 환경변수 연동)
+      - name: 파이썬 스크립트로 단일 엑셀 변환 (★TARGET_URLS 환경변수 연동)
         env:
           TARGET_URLS: ${{ secrets.TARGET_URLS }}
         run: python json_to_excel.py
