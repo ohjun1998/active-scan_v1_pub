@@ -2,6 +2,7 @@ import json
 import os
 import glob
 import re
+from urllib.parse import urlparse, urljoin  # 🔥 절대경로 변환을 위한 라이브러리 추가
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -46,7 +47,6 @@ if jsonl_files:
                 try:
                     obj = json.loads(line_str)
                     if isinstance(obj, dict):
-                        # 🔥 [완벽 수정] Katana v1.6.1 JSON 규격에 맞게 'request' 내부의 'endpoint'와 'source'를 정확히 타겟팅!
                         if 'request' in obj and isinstance(obj['request'], dict):
                             url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
                             method = obj['request'].get('method', 'GET')
@@ -63,7 +63,6 @@ if jsonl_files:
                 except Exception:
                     pass
 
-                # 정규식을 통한 최후의 URL 추출 방어선
                 if not url_str:
                     url_match = re.search(r'(https?://[^\s"\'},]+)', line_str)
                     if url_match:
@@ -71,20 +70,30 @@ if jsonl_files:
 
                 if not url_str:
                     continue
-                    
+                
+                # 🔥 [핵심 로직] 추출된 url이 상대경로(/a/b/c)일 경우 출처(Source)의 도메인을 붙여 절대경로로 조립!
+                if not url_str.startswith('http'):
+                    if source and source.startswith('http'):
+                        url_str = urljoin(source, url_str)
+                
+                # urlparse를 사용하여 깔끔하게 대상 도메인(Target) 추출
+                target_source = "Unknown"
                 try:
-                    if '//' in url_str:
-                        target_source = url_str.split('/')[2].split(':')[0]
+                    parsed_url = urlparse(url_str)
+                    if parsed_url.hostname:
+                        target_source = parsed_url.hostname
                     else:
-                        target_source = url_str.split('/')[0].split(':')[0]
+                        if '//' in url_str:
+                            target_source = url_str.split('/')[2].split(':')[0]
+                        else:
+                            target_source = url_str.split('/')[0].split(':')[0]
                 except Exception:
-                    target_source = "Unknown"
+                    pass
                     
                 if target_source not in allowed_domains:
                     continue
                 
-                # 🔥 추출된 부모 URL(Source)이 최종 URL과 같다면 대문 진입, 다르면 진짜 출처 보존!
-                final_source = "시작 랜딩 페이지(Direct)"
+                final_source = "시작 랜딩 페이지(Depth 1)"
                 if source and source.strip():
                     clean_src = source.strip()
                     if clean_src.rstrip('/') != url_str.rstrip('/'):
@@ -229,4 +238,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [출처 반영 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [상대경로 보정 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
