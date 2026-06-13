@@ -21,7 +21,9 @@ jobs:
     needs: setup-matrix
     runs-on: ubuntu-latest
     strategy:
-      matrix(matrix-json): ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
+      # 🔥 [문법 에러 해결] 오타가 났던 matrix 구문을 올바른 표준 YAML 문법으로 전면 교정 완료!
+      matrix:
+        index: ${{ fromJson(needs.setup-matrix.outputs.matrix-json) }}
       max-parallel: 20
       fail-fast: false
     
@@ -72,8 +74,7 @@ jobs:
           echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
           
-          # 2. 🔥 [실시간 1발씩 스트리밍 엔진]
-          # --pid 플래그 덕분에 Katana 프로세스가 죽으면 tail도 알아서 실시간으로 자동 종료됩니다.
+          # 2. [실시간 1발씩 스트리밍 엔진]
           CURRENT_REQ=0
           tail -f --pid=$KATANA_PID -n +1 katana_verbose.log | while read -r vline; do
             # JSON 로그에서 엔드포인트 주소 정밀 추출
