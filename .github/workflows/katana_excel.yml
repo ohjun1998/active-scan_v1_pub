@@ -4,6 +4,7 @@ on:
   workflow_dispatch: 
 
 jobs:
+  # [1단계] 20대의 가상머신(0~19) 인덱스 배열을 고정으로 생성
   setup-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -15,6 +16,7 @@ jobs:
           JSON_STRING=$(jq -n -c '[range(0; 20)]')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
+  # [2단계] 정확히 20대의 가상머신이 97개 도메인을 4~5개씩 나누어서 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
@@ -25,7 +27,7 @@ jobs:
       fail-fast: false
     
     steps:
-      - name: 레포지토리 코드 가져오기
+      - name: レ포지토리 코드 가져오기
         uses: actions/checkout@v4
 
       - name: 도구 및 라이브러리 설치
@@ -36,9 +38,11 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
+          # 샌드박스 크래시 방어 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
+          # 현재 가상머신의 고유 번호 (0 ~ 19)
           VM_IDX=${{ matrix.index }}
           
           TOTAL_TARGETS=()
@@ -59,6 +63,7 @@ jobs:
           
           touch katana_output.jsonl
           
+          # 지능형 20배수 순차 탐색 루프
           for (( i=$VM_IDX; i<$NUM_TARGETS; i+=20 )); do
             TARGET_URL="${TOTAL_TARGETS[$i]}"
             echo "::add-mask::$TARGET_URL"
@@ -70,13 +75,9 @@ jobs:
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # GitHub Actions 가상머신에 내장된 순정 구글 크롬 브라우저 경로 바인딩
-            export SOURCE_CHROME="/usr/bin/google-chrome"
-
-            # Katana 고성능 우회 스펙 전개
+            # 🔥 [엔진 안정화 변환] 크래시를 유발하는 -system-chrome 플래그를 우회하고, 
+            # 내장 크롬 엔진에 직접 우회 옵션을 패딩하여 안정성과 차단 회피를 동시에 잡았습니다.
             katana -u "$TARGET_URL" \
-              -system-chrome \
-              -chrome-path "$SOURCE_CHROME" \
               -c 2 \
               -rl 4 \
               -rd 1 \
@@ -98,16 +99,16 @@ jobs:
             
             KATANA_PID=$!
             
-            # 🔥 [완벽 수정] 어떠한 여백이나 포맷 변동에도 숫자만 정확히 발라내는 정밀 정규식 엔진
+            # 실시간 스트리밍 분석 단 (여백 및 개행 무력화 버전)
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
-              # grep의 강력한 추출 기능을 사용하여 "depth": 뒤에 오는 숫자만 100% 잡아냅니다.
+              # 여백에 상관없이 depth 숫자만 추출
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1)
               
-              if [ -z "$V_DEPTH" ] || ! [[ "$V_DEPTH" =~ ^[1-9]$ ]]; then
+              if [ -z "$V_DEPTH" ] || ! [[ "$V_DEPTH" =~ ^[1-3]$ ]]; then
                 if echo "$vline" | grep -q "Sending request to"; then
                   V_DEPTH="1"
                 else
@@ -162,6 +163,13 @@ jobs:
               cat temp_output.jsonl >> katana_output.jsonl
             fi
             
+            # 디버깅: 수집이 0개일 때 원본 로그 상위 10줄 강제 상향 출력
+            CHK_CNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+            if [ "$CHK_CNT" -eq 0 ] && [ -f temp_verbose.log ]; then
+              echo "❌ [VM-$VM_IDX 스캔 실패 분석 원본 로그]"
+              head -n 20 temp_verbose.log || true
+            fi
+            
             rm -f temp_verbose.log temp_output.jsonl clean_stream.log
             echo "----------------------------------------------------"
           done
@@ -183,6 +191,7 @@ jobs:
           path: katana_output_${{ matrix.index }}.zip
           retention-days: 1
 
+  # [3단계] 20대의 가상머신 결과물을 하나로 긁어모아 엑셀 변환 및 디코드 토스
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
     if: always()
@@ -238,7 +247,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 분할 고속 병렬 스캔 및 대시보드 하이퍼링크 엑셀 변환 성공!** \n\n결과 리포트는 아래 링크 하단 'Artifacts'에서 안전하게 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 균등 배정 및 고가독성 멀티탭 대시보드 하이퍼링크 완료!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
