@@ -4,17 +4,20 @@ on:
   workflow_dispatch: 
 
 jobs:
+  # [1단계] 20대의 가상머신(0~19) 인덱스 배열을 고정으로 생성
   setup-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix-json: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: 가상머신 인덱스 생성
+      - name: 가상머신 20대 고정 인덱스 생성
         id: set-matrix
         run: |
-          JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
+          # 0부터 19까지 총 20개의 숫자를 가진 JSON 배열 생성
+          JSON_STRING=$(jq -n -c '[range(0; 20)]')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
+  # [2단계] 정확히 20대의 가상머신이 97개 도메인을 4~5개씩 나누어서 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
@@ -25,137 +28,147 @@ jobs:
       fail-fast: false
     
     steps:
-      - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
-        run: |
-          INDEX=${{ matrix.index }}
-          LINE_NUM=$((INDEX + 1))
-          TARGET_URL=$(echo "${{ secrets.TARGET_URLS }}" | sed -n "${LINE_NUM}p" | tr -d '\r' | xargs)
-          echo "::add-mask::$TARGET_URL"
-          echo "TARGET_URL=$TARGET_URL" >> $GITHUB_ENV
+      - name: 레포지토리 코드 가져오기
+        uses: actions/checkout@v4
 
       - name: 도구 및 라이브러리 설치
         run: |
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           
-      - name: Katana 개별 헤드리스 스캔 & 실시간 로그 모니터링
+      - name: 가상머신별 타겟 도메인 분할 할당 및 연속 스캔
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
-          HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
-          echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
+          # 브라우저 샌드박스 우회 세팅
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
-          touch katana_verbose.log
+          # 현재 가상머신의 고유 번호 (0 ~ 19)
+          VM_IDX=${{ matrix.index }}
+          
+          # Secrets에서 전체 타겟 주소를 배열로 변환
+          IFS=$'\n' read -r -d '' -a TOTAL_TARGETS <<< "${{ secrets.TARGET_URLS }}"
+          NUM_TARGETS=${#TOTAL_TARGETS[@]}
+          
+          echo "📊 전체 타겟 개수: $NUM_TARGETS 개"
+          echo "⚙️ 현재 가상머신 번호: VM-$VM_IDX"
+          echo "===================================================="
+          
+          # 통합 결과 파일 초기화
           touch katana_output.jsonl
-          touch clean_stream.log
           
-          # 1. Katana 고속 스캔 백그라운드 구동 (-d 3 스펙 고정 유지)
-          katana -u "$TARGET_URL" \
-            -c 2 \
-            -rl 5 \
-            -rd 1 \
-            -d 3 \
-            -fs fqdn \
-            -cs "$HOSTNAME" \
-            -sc \
-            -headless \
-            -v \
-            -jc \
-            -jsonl \
-            -o katana_output.jsonl > katana_verbose.log 2>&1 &
-          
-          KATANA_PID=$!
-          echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
-          echo "🔍 [VM-${{ matrix.index }} 실시간 순차 검사 URL 스트리밍 가동]"
-          
-          # 2. 🔥 [버그 전면 수정] Depth 멀티 정규식 판별 가공 스크립트 엔진
-          tail -f -n +1 katana_verbose.log 2>/dev/null | while read -r vline; do
-            CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
-            [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
-            [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
+          # 🔥 [지능형 분배 로직] 20의 배수 배정 방식을 사용하여 97개 도메인을 20대에 균등 분할
+          # 예: VM-0은 0, 20, 40, 60, 80번째 타겟을 담당합니다.
+          for (( i=$VM_IDX; i<$NUM_TARGETS; i+=20 )); do
+            TARGET_URL="${TOTAL_TARGETS[$i]}"
+            TARGET_URL=$(echo "$TARGET_URL" | tr -d '\r' | xargs)
             
-            # Katana 원본 verbose JSON 안에 들어있는 "depth":X 값을 유연하게 가로챕니다.
-            V_DEPTH=$(echo "$vline" | sed -n 's/.*"depth":\([0-9]\).*/\1/p')
+            # 빈 줄 예외 처리
+            [ -z "$TARGET_URL" ] && continue
             
-            # 만약 JSON에 depth 속성이 없다면 가공되지 않은 쌩 로그 텍스트를 검문하여 매핑합니다.
-            if [ -z "$V_DEPTH" ]; then
-              if echo "$vline" | grep -q '"depth":3'; then
-                V_DEPTH="3"
-              elif echo "$vline" | grep -q '"depth":1'; then
-                V_DEPTH="1"
-              elif echo "$vline" | grep -q "Sending request to"; then
-                V_DEPTH="1"
-              elif echo "$vline" | grep -q '"depth":2'; then
-                V_DEPTH="2"
-              else
-                # 기본값 디폴팅 우회 처리
-                V_DEPTH="2"
-              fi
-            fi
+            # 마스킹 처리 (보안)
+            echo "::add-mask::$TARGET_URL"
             
-            if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
-              echo "${V_DEPTH}||${CLEAN_URL}" >> clean_stream.log
-            fi
-          done &
-          STREAM_PID=$!
-          
-          # 3. 지능형 5초 강제 킬러 타이머 엔진 및 정밀 스트리머
-          LAST_STREAM_COUNT=0
-          IDLE_LOOPS=0
-          
-          while kill -0 $KATANA_PID 2>/dev/null; do
-            sleep 1
+            # 호스트명 추출
+            HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
             
-            TOTAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
-            [ -z "$TOTAL_COUNT" ] && TOTAL_COUNT=0
+            echo "🚀 [VM-$VM_IDX] 현재 타겟 스캔 시작: $TARGET_URL (정규식: $HOSTNAME)"
             
-            if [ -f clean_stream.log ]; then
-              CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
+            # 임시 개별 로그 초기화
+            touch temp_verbose.log
+            touch temp_output.jsonl
+            touch clean_stream.log
+            
+            # Katana 스캔 백그라운드 구동
+            katana -u "$TARGET_URL" \
+              -c 2 \
+              -rl 5 \
+              -rd 1 \
+              -d 3 \
+              -fs fqdn \
+              -cs "$HOSTNAME" \
+              -sc \
+              -headless \
+              -v \
+              -jc \
+              -jsonl \
+              -o temp_output.jsonl > temp_verbose.log 2>&1 &
+            
+            KATANA_PID=$!
+            
+            # 실시간 파싱 단에 Depth(깊이) 추적 로직 적용 (백그라운드)
+            tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
+              CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
+              [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+              [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
-              tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r stream_line; do
-                PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
-                PARSE_URL=$(echo "$stream_line" | cut -d'|' -f3-)
-                
-                echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] ➡️ ${PARSE_URL}"
-              done
-              LAST_STREAM_COUNT=$CURRENT_REQ
-            else
-              CURRENT_REQ=0
+              V_DEPTH=$(echo "$vline" | sed -n 's/.*"depth":\([0-9]\).*/\1/p')
+              if [ -z "$V_DEPTH" ]; then
+                if echo "$vline" | grep -q '"depth":3'; then V_DEPTH="3"
+                elif echo "$vline" | grep -q '"depth":1'; then V_DEPTH="1"
+                elif echo "$vline" | grep -q "Sending request to"; then V_DEPTH="1"
+                elif echo "$vline" | grep -q '"depth":2'; then V_DEPTH="2"
+                else V_DEPTH="2"; fi
+              fi
+              
+              if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
+                echo "${V_DEPTH}||${CLEAN_URL}" >> clean_stream.log
+              fi
+            done &
+            STREAM_PID=$!
+            
+            # 지능형 5초 강제 킬러 타이머 엔진 및 정밀 스트리머
+            LAST_STREAM_COUNT=0
+            IDLE_LOOPS=0
+            
+            while kill -0 $KATANA_PID 2>/dev/null; do
+              sleep 1
+              TOTAL_COUNT=$(wc -l < temp_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+              [ -z "$TOTAL_COUNT" ] && TOTAL_COUNT=0
+              
+              if [ -f clean_stream.log ]; then
+                CURRENT_REQ=$(wc -l < clean_stream.log 2>/dev/null | tr -d '[:space:]' || echo 0)
+                tail -n +$((LAST_STREAM_COUNT + 1)) clean_stream.log | while read -r stream_line; do
+                  PARSE_DEPTH=$(echo "$stream_line" | cut -d'|' -f1)
+                  PARSE_URL=$(echo "$stream_line" | cut -d'|' -f3-)
+                  echo "[${CURRENT_REQ}/${TOTAL_COUNT}] [Depth:${PARSE_DEPTH}] ➡️ ${PARSE_URL}"
+                done
+                LAST_STREAM_COUNT=$CURRENT_REQ
+              else
+                CURRENT_REQ=0
+              fi
+              
+              # 5초 타임아웃 밸런서
+              if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
+                IDLE_LOOPS=$((IDLE_LOOPS + 1))
+                if [ "$IDLE_LOOPS" -ge 5 ]; then
+                  echo "⚠️ [5초 보호장치] 금융 보안 모듈 데드락으로 인해 다음 타겟으로 조기 이동합니다."
+                  kill -9 $KATANA_PID 2>/dev/null || true
+                  break
+                fi
+              else
+                IDLE_LOOPS=0
+              fi
+            done
+            
+            # 자원 청소 및 데이터 누적 병합
+            kill -9 $STREAM_PID 2>/dev/null || true
+            wait $KATANA_PID 2>/dev/null || true
+            
+            if [ -f temp_output.jsonl ]; then
+              cat temp_output.jsonl >> katana_output.jsonl
             fi
             
-            # 5초 타임아웃 밸런서
-            if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
-              IDLE_LOOPS=$((IDLE_LOOPS + 1))
-              if [ "$IDLE_LOOPS" -ge 5 ]; then
-                echo "===================================================="
-                echo "⚠️ [5초 타임아웃 보호장치 발동] 금융 보안 모듈 데드락이 감지되었습니다."
-                echo "===================================================="
-                kill -9 $KATANA_PID 2>/dev/null || true
-                break
-              fi
-            else
-              IDLE_LOOPS=0
-            fi
+            # 임시 파일 삭제하여 다음 타겟 준비
+            rm -f temp_verbose.log temp_output.jsonl clean_stream.log
+            echo "----------------------------------------------------"
           done
-          
-          kill -9 $STREAM_PID 2>/dev/null || true
-          wait $KATANA_PID 2>/dev/null || true
           
           FINAL_COUNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]')
           [ -z "$FINAL_COUNT" ] && FINAL_COUNT=0
-          echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집 완료: ${FINAL_COUNT}개"
-          
-          if [ "$FINAL_COUNT" -eq 0 ]; then
-            echo "===================================================="
-            echo "🚨 [VM-${{ matrix.index }} 오류 발생] 수집된 결과가 0개입니다. 아래 원본 로그를 확인하세요:"
-            echo "----------------------------------------------------"
-            cat katana_verbose.log | tail -n 50
-            echo "----------------------------------------------------"
-            echo "===================================================="
-          fi
+          echo "🏁 [VM-$VM_IDX 완료] 총 할당 타겟 스캔 완료! 누적 수집 개수: ${FINAL_COUNT}개"
 
-      - name: 결과물 비밀번호 압축 암호화 (특수문자 차단 우회 보호)
+      - name: 결과물 비밀번호 압축 암호화
         env:
           ZIP_PWD: ${{ secrets.ARTIFACT_PASSWORD }}
         run: |
@@ -168,6 +181,7 @@ jobs:
           path: katana_output_${{ matrix.index }}.zip
           retention-days: 1
 
+  # [3단계] 20대의 가상머신 결과물을 하나로 긁어모아 엑셀 변환 및 디코드 토스
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
     if: always()
@@ -206,7 +220,7 @@ jobs:
             done
           fi
 
-      - name: 파이썬 스크립트로 단일 엑셀 변환 (TARGET_URLS 환경변수 연동)
+      - name: 파이썬 스크립트로 단일 엑셀 변환 (대시보드형 엔진 연동)
         env:
           TARGET_URLS: ${{ secrets.TARGET_URLS }}
         run: python json_to_excel.py
@@ -223,11 +237,11 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **정밀 고속 스캔 및 내림차순 가독성 엑셀 변환 완료!** \n\n아래 링크 페이지 최하단 'Artifacts'에서 결과 보고서를 안전하게 내려받으세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 분할 고속 병렬 스캔 및 대시보드 하이퍼링크 엑셀 변환 성공!** \n\n결과 리포트는 아래 링크 하단 'Artifacts'에서 안전하게 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"⚠️ 병렬 스캔 완료되었으나 지정 도메인에 일치하는 수집 데이터가 없습니다.\"}" \
+                 -d "{\"content\": \"⚠️ 분할 병렬 스캔은 완료되었으나 지정 도메인에 일치하는 수집 데이터가 없습니다.\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           fi
