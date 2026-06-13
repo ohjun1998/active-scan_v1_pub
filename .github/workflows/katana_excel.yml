@@ -4,6 +4,7 @@ on:
   workflow_dispatch: 
 
 jobs:
+  # [1단계] Secrets에서 URL 개수를 파악하여 가상머신 번호 배열([0, 1, 2...])을 동적으로 생성
   setup-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -12,10 +13,10 @@ jobs:
       - name: 가상머신 인덱스 생성
         id: set-matrix
         run: |
-          # 오타 버그 수정 완료
           JSON_STRING=$(echo "${{ secrets.TARGET_URLS }}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | keys')
           echo "matrix=$JSON_STRING" >> $GITHUB_OUTPUT
 
+  # [2단계] 최대 20대의 가상머신을 동시에 띄워 헤드리스 스텔스 고속 스캔 진행
   katana-parallel-scan:
     needs: setup-matrix
     runs-on: ubuntu-latest
@@ -26,7 +27,7 @@ jobs:
       fail-fast: false
     
     steps:
-      - name: 타겟 URL 추출 및 마스킹
+      - name: 타겟 URL 추출 및 마스킹 (보안 핵심)
         run: |
           INDEX=${{ matrix.index }}
           LINE_NUM=$((INDEX + 1))
@@ -41,12 +42,18 @@ jobs:
       - name: Katana 개별 헤드리스 스캔 & 실시간 로그 모니터링
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
+          
+          # 프로토콜(http/https) 유무나 패스 명에 상관없이 도메인 호스트명만 완벽하게 싹 발라냅니다.
           HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
           echo "🌐 스캔 대상 호스트 제한 정규식: $HOSTNAME"
           
+          # Katana 브라우저 내부 엔진(go-rod)에 샌드박스 무력화 플래그를 강제로 주입합니다.
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
+          
+          # Ubuntu 24.04 러너 커널의 브라우저 네임스페이스 차단 정책을 임시 해제합니다.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           
+          # 1. Katana 스캔을 백그라운드로 실행 (고속 스캔 -d 2 설정)
           katana -u "$TARGET_URL" \
             -c 2 \
             -rl 5 \
@@ -61,8 +68,9 @@ jobs:
             -o katana_output.jsonl > katana_verbose.log 2>&1 &
           
           KATANA_PID=$!
-          echo "⏳ [VM-${{ matrix.index }}] 고속 샌드박스 우회 스캔 시작 (PID: $KATANA_PID)"
+          echo "⏳ [VM-${{ matrix.index }}] 샌드박스 우회형 고속 스캔 시작 (PID: $KATANA_PID)"
           
+          # 2. 30초마다 수집 상황 모니터링 로그 출력
           while kill -0 $KATANA_PID 2>/dev/null; do
             sleep 30
             if [ -f katana_output.jsonl ]; then
@@ -72,29 +80,41 @@ jobs:
           done
           
           wait $KATANA_PID
+          EXIT_CODE=$?
           
+          # 3. 파일 안정성 검사 및 빈 파일 처리
           if [ -f katana_output.jsonl ]; then
             FINAL_COUNT=$(wc -l < katana_output.jsonl)
           else
             FINAL_COUNT=0
             touch katana_output.jsonl
           fi
-          echo "🏁 [VM-${{ matrix.index }} 완료] 최종 수집: ${FINAL_COUNT}개"
+          
+          # 0개이거나 실패 시 상세 원인을 로그에 강제로 뱉어냅니다.
+          if [ $FINAL_COUNT -eq 0 ] || [ $EXIT_CODE -ne 0 ]; then
+            echo "🚨 [VM-${{ matrix.index }} 원인 분석] 수집 결과가 없거나 에러가 났습니다. 아래 상세 로그를 확인하세요:"
+            echo "----------------------------------------------------"
+            cat katana_verbose.log
+            echo "----------------------------------------------------"
+          else
+            echo "🏁 [VM-${{ matrix.index }} 완료] 스캔 성공! (최종 수집: ${FINAL_COUNT}개)"
+          fi
 
-      - name: 결과물 비밀번호 압축 암호화
+      - name: 결과물 비밀번호 압축 암호화 (특수문자 차단 우회 보호)
         env:
           ZIP_PWD: ${{ secrets.ARTIFACT_PASSWORD }}
         run: |
           zip -P "$ZIP_PWD" -r "katana_output_${{ matrix.index }}.zip" katana_output.jsonl
 
+      # 🔥 [중복 해결 완료] 문법 에러가 났던 uses 적층 버그를 깔끔하게 지웠습니다.
       - name: 임시 아티팩트 업로드
-        uses: actions/with-artifact@v4
         uses: actions/upload-artifact@v4
         with:
           name: part-${{ matrix.index }}
           path: katana_output_${{ matrix.index }}.zip
           retention-days: 1
 
+  # [3단계] 모든 가상머신의 스캔이 끝나면 결과들을 수집해 암호를 풀고 엑셀로 병합
   aggregate-results:
     needs: [setup-matrix, katana-parallel-scan]
     if: always()
@@ -133,7 +153,7 @@ jobs:
             done
           fi
 
-      - name: 파이썬 스크립트로 단일 엑셀 변환 (★TARGET_URLS 환경변수 연동)
+      - name: 파이썬 스크립트로 단일 엑셀 변환 (TARGET_URLS 환경변수 연동)
         env:
           TARGET_URLS: ${{ secrets.TARGET_URLS }}
         run: python json_to_excel.py
