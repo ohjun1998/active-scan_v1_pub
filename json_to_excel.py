@@ -30,7 +30,8 @@ jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
 if jsonl_files:
     for file_path in jsonl_files:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        # 🔥 [Bug Fix]: errors='ignore' 속성을 주입하여 한글 깨짐 바이트가 들어와도 크래시 없이 패스하도록 방어막 구축!
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_str = line.strip()
                 if not line_str:
@@ -105,7 +106,7 @@ wb = Workbook()
 font_family = 'Malgun Gothic'
 header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid')
-total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid') # 총합 행을 위한 미색 그레이
+total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
 data_font = Font(name=font_family, size=10)
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
@@ -193,7 +194,7 @@ if data:
         ws_dashboard.cell(row=idx, column=2).font = Font(name=font_family, size=10, bold=True)
         last_row_idx = idx
 
-    # 🔥 [요청 사항] 대시보드 최하단에 전체 URL 총합 요약 행 주입
+    # 대시보드 최하단에 전체 URL 총합 요약 행 주입
     total_row_idx = last_row_idx + 1
     ws_dashboard.cell(row=total_row_idx, column=1, value="📊 수집된 URL 총합 (Total)").alignment = center_alignment
     ws_dashboard.cell(row=total_row_idx, column=1).font = Font(name=font_family, size=10, bold=True, color='FF0000')
