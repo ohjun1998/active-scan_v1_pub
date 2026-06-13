@@ -54,10 +54,13 @@ if jsonl_files:
                             method = obj.get('method', 'GET')
                             
                         timestamp = obj.get('timestamp', '')
-                        # 🔥 [Bug Fix 핵심]: Katana 공식 명세에 맞춰 기존 'source' 키를 'source_url'로 정격 전면 교체!
-                        source = obj.get('source_url', '')
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
+                        
+                        # 🔥 [출처 추적 다중 방어선 주입]
+                        # 1순위: source_url -> 2순위: referrer -> 3순위: source 순으로 뒤져서 진짜 부모 페이지를 찾아냅니다.
+                        source = obj.get('source_url') or obj.get('referrer') or obj.get('source', '')
+                        
                 except Exception:
                     pass
 
@@ -79,13 +82,20 @@ if jsonl_files:
                     
                 if target_source not in allowed_domains:
                     continue
+                
+                # 🔥 추출된 부모 URL이 타겟 URL 자체와 완전 같다면 대문 진입으로 세팅, 다르면 진짜 상위 페이지 주소를 보존합니다.
+                final_source = "시작 랜딩 페이지(Depth 1)"
+                if source and source.strip():
+                    clean_src = source.strip()
+                    if clean_src.rstrip('/') != url_str.rstrip('/'):
+                        final_source = clean_src
                     
                 row = {
                     '대상 타겟 (Target)': target_source,
                     '찾은 시간 (Timestamp)': timestamp,
                     '요청 메서드 (Method)': method,
                     '발견된 URL (URL)': url_str,
-                    '출처 페이지 (Source)': source if source else "Direct 랜딩 주소",
+                    '출처 페이지 (Source)': final_source,
                     'HTML 태그 (Tag)': tag,
                     '속성 (Attribute)': attribute
                 }
@@ -100,7 +110,7 @@ else:
     df = pd.DataFrame(columns=['대상 타겟 (Target)', '찾은 시간 (Timestamp)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
     df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', '', '', '', '']
 
-# --- 📊 엑셀 엔진 레이아웃 빌드 조립 단 ---
+# --- 📊 엑셀 구조 디자인 단 ---
 wb = Workbook()
 
 font_family = 'Malgun Gothic'
@@ -111,7 +121,7 @@ data_font = Font(name=font_family, size=10)
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
 
-# A. 대시보드 메인 현황판 수립
+# A. 대시보드
 ws_dashboard = wb.active
 ws_dashboard.title = "대시보드"
 ws_dashboard.append(["대상 타겟 도메인 (Target Domain)", "수집된 고유 URL 개수", "상세 페이지 바로가기"])
@@ -132,7 +142,6 @@ if data:
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        # 복귀 배너 주입
         ws_domain.merge_cells("A1:H1")
         back_btn = ws_domain["A1"]
         back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
@@ -142,7 +151,6 @@ if data:
         back_btn.alignment = center_alignment
         ws_domain.row_dimensions[1].height = 26
         
-        # 소스 데이터 이식
         domain_subset = df[df['대상 타겟 (Target)'] == domain]
         headers = list(df.columns)
         ws_domain.append(headers)
@@ -150,14 +158,12 @@ if data:
         for r in dataframe_to_rows(domain_subset, index=False, header=False):
             ws_domain.append(r)
             
-        # 테이블 헤더 서식 지정 (2행)
         for cell in ws_domain[2]:
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = center_alignment
         ws_domain.row_dimensions[2].height = 20
             
-        # 데이터 바디 서식 정렬 일괄 전개
         for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
             for cell in row:
                 cell.font = data_font
@@ -169,7 +175,6 @@ if data:
                 if cell.column in [4, 5]:
                     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                     
-        # 열 너비 자동 보정
         for col_idx in range(1, len(headers) + 1):
             max_len = 0
             for row_idx in range(2, ws_domain.max_row + 1):
@@ -198,7 +203,6 @@ if data:
         ws_dashboard.cell(row=idx, column=2).font = Font(name=font_family, size=10, bold=True)
         last_row_idx = idx
 
-    # 대시보드 최하단에 전체 URL 총합 요약 행 주입
     total_row_idx = last_row_idx + 1
     ws_dashboard.cell(row=total_row_idx, column=1, value="📊 수집된 URL 총합 (Total)").alignment = center_alignment
     ws_dashboard.cell(row=total_row_idx, column=1).font = Font(name=font_family, size=10, bold=True, color='FF0000')
@@ -225,4 +229,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 28
 
 wb.save(excel_file)
-print(f"🏁 [출처 반영 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [상위 부모 추적 연동 완료] 엑셀 세이브 완료: {excel_file}")
