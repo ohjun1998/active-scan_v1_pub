@@ -26,51 +26,34 @@ for line in target_urls_env.split('\n'):
 
 print(f"🎯 [필터 켜짐] 다음 지정 도메인 결과만 엑셀에 저장됩니다: {allowed_domains}")
 
-# 🛡️ [추가] 정보보안전문가를 위한 URL 위험도(Risk Score) 산정 알고리즘
+# 🛡️ 정보보안전문가를 위한 URL 위험도(Risk Score) 산정 알고리즘
 def calculate_risk_score(url, method):
     score = 0
     url_lower = url.lower()
     
-    # 1. HTTP Method 가중치 (데이터 변조/전송 가능성)
-    if method.upper() in ['POST', 'PUT', 'DELETE', 'PATCH']:
-        score += 20
+    if method.upper() in ['POST', 'PUT', 'DELETE', 'PATCH']: score += 20
+    if '?' in url_lower: score += 30
         
-    # 2. 쿼리 파라미터 유무 (인젝션 공격 표면)
-    if '?' in url_lower:
-        score += 30
-        
-    # 3. 민감 키워드 포함 여부 (인증/인가/정보노출)
     sensitive_keywords = ['admin', 'login', 'api', 'auth', 'config', 'backup', 'setup', 'manage', 'password', 'token', 'secret', 'dev', 'stg', 'test', 'internal', 'intra', 'debug']
-    if any(keyword in url_lower for keyword in sensitive_keywords):
-        score += 40
+    if any(keyword in url_lower for keyword in sensitive_keywords): score += 40
         
-    # 4. 정보 누출 위험 확장자 (DB, 백업, 설정 파일 등)
     dangerous_exts = ['.bak', '.env', '.sql', '.zip', '.tar', '.gz', '.log', '.txt', '.xml', '.json', '.swp', '.git']
-    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in dangerous_exts):
-        score += 50
+    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in dangerous_exts): score += 50
         
-    # 5. 서버사이드 처리 스크립트
     script_exts = ['.php', '.jsp', '.asp', '.aspx', '.do', '.action', '.pwkjson']
-    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in script_exts):
-        score += 30
+    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in script_exts): score += 30
         
-    # 6. 취약점 가능성이 낮은 정적 자산 감점
     static_exts = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ico']
-    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in static_exts):
-        score -= 20
+    if any(url_lower.endswith(ext) or (ext + '?') in url_lower for ext in static_exts): score -= 20
         
-    # 최종 등급 산정
     final_score = max(score, 0)
-    if final_score >= 60:
-        level = 'High'
-    elif final_score >= 30:
-        level = 'Medium'
-    else:
-        level = 'Low'
+    if final_score >= 60: level = 'High'
+    elif final_score >= 30: level = 'Medium'
+    else: level = 'Low'
         
     return final_score, level
 
-# 2. 각 VM에서 수집되어 복호화된 jsonl 파일들 매핑 및 파싱
+# 2. 파싱 및 엑셀 데이터 매핑
 jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
 if jsonl_files:
@@ -78,8 +61,7 @@ if jsonl_files:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_str = line.strip()
-                if not line_str:
-                    continue
+                if not line_str: continue
                     
                 url_str = ""
                 method = "GET"
@@ -101,46 +83,37 @@ if jsonl_files:
                             
                         tag = obj.get('tag', '')
                         attribute = obj.get('attribute', '')
-                        
                 except Exception:
                     pass
 
                 if not url_str:
                     url_match = re.search(r'(https?://[^\s"\'},]+)', line_str)
-                    if url_match:
-                        url_str = url_match.group(1)
+                    if url_match: url_str = url_match.group(1)
 
-                if not url_str:
-                    continue
+                if not url_str: continue
                 
-                # 상대경로 절대경로로 조립
-                if not url_str.startswith('http'):
-                    if source and source.startswith('http'):
-                        url_str = urljoin(source, url_str)
-                
+                # 🔥 [핵심 로직] 추출된 URL이 상대경로(/a/b)일 경우, 타겟 도메인과 결합하여 완벽한 절대경로(http://...)로 자동 조립!
                 target_source = "Unknown"
                 try:
                     parsed_url = urlparse(url_str)
                     if parsed_url.hostname:
                         target_source = parsed_url.hostname
                     else:
-                        if '//' in url_str:
-                            target_source = url_str.split('/')[2].split(':')[0]
-                        else:
-                            target_source = url_str.split('/')[0].split(':')[0]
-                except Exception:
-                    pass
+                        if '//' in url_str: target_source = url_str.split('/')[2].split(':')[0]
+                        else: target_source = url_str.split('/')[0].split(':')[0]
+                except Exception: pass
+                
+                if not url_str.startswith('http'):
+                    if source and source.startswith('http'): url_str = urljoin(source, url_str)
+                    else: url_str = urljoin(f"https://{target_source}", url_str)
                     
-                if target_source not in allowed_domains:
-                    continue
+                if target_source not in allowed_domains: continue
                 
                 final_source = "시작 랜딩 페이지(Depth 1)"
                 if source and source.strip():
                     clean_src = source.strip()
-                    if clean_src.rstrip('/') != url_str.rstrip('/'):
-                        final_source = clean_src
+                    if clean_src.rstrip('/') != url_str.rstrip('/'): final_source = clean_src
 
-                # 🛡️ 위험도 연산 적용
                 risk_score, risk_level = calculate_risk_score(url_str, method)
                     
                 row = {
@@ -155,10 +128,8 @@ if jsonl_files:
                 }
                 data.append(row)
 
-# 3. 데이터프레임 빌드
 if data:
     df = pd.DataFrame(data)
-    # 중복 제거 (URL과 Method가 같은 경우 중복 수집된 것으로 간주하여 제거)
     df.drop_duplicates(subset=['대상 타겟 (Target)', '발견된 URL (URL)', '요청 메서드 (Method)'], inplace=True)
     df = df.sort_values(by=['위험 점수 (Score)', '대상 타겟 (Target)', '발견된 URL (URL)'], ascending=[False, False, True])
     print(f"🟢 [필터링 완료] 총 {len(df)}개의 고유 타겟 엔드포인트가 엑셀에 매핑되었습니다!")
@@ -166,7 +137,6 @@ else:
     df = pd.DataFrame(columns=['대상 타겟 (Target)', '위험 등급 (Risk Level)', '위험 점수 (Score)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
     df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', 0, '', '', '', '', '']
 
-# --- 📊 엑셀 엔진 레이아웃 빌드 조립 단 ---
 wb = Workbook()
 
 font_family = 'Malgun Gothic'
@@ -174,16 +144,14 @@ header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid')
 total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
 
-# 위험도 컬러 스타일 세팅
-high_risk_font = Font(name=font_family, size=10, bold=True, color='FF0000')   # Red
-medium_risk_font = Font(name=font_family, size=10, bold=True, color='E26B0A') # Orange
-low_risk_font = Font(name=font_family, size=10, color='808080')               # Gray
+high_risk_font = Font(name=font_family, size=10, bold=True, color='FF0000')   
+medium_risk_font = Font(name=font_family, size=10, bold=True, color='E26B0A') 
+low_risk_font = Font(name=font_family, size=10, color='808080')               
 data_font = Font(name=font_family, size=10)
 
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
 
-# A. 대시보드
 ws_dashboard = wb.active
 ws_dashboard.title = "대시보드"
 ws_dashboard.append(["대상 타겟 도메인 (Target Domain)", "수집된 고유 URL 개수", "상세 페이지 바로가기"])
@@ -200,26 +168,22 @@ if not df.empty and len(data) > 0:
     unique_domains = df['대상 타겟 (Target)'].unique()
     last_row_idx = 1
     
-    # 🔥 1. [우선순위] 전체 취약점 분석용 High Risk 탭을 대시보드 바로 다음에 최우선 생성
     ws_risk = wb.create_sheet(title="🚨 High Risk (우선순위)")
     ws_risk.merge_cells("A1:H1")
     back_btn_risk = ws_risk["A1"]
     back_btn_risk.value = "⬅️ 대시보드 현황판으로 돌아가기"
     back_btn_risk.hyperlink = "#'대시보드'!A1"
     back_btn_risk.font = Font(name=font_family, size=11, bold=True, color='FFFFFF')
-    back_btn_risk.fill = PatternFill(start_color='C00000', end_color='C00000', fill_type='solid') # 강렬한 빨간색 배너
+    back_btn_risk.fill = PatternFill(start_color='C00000', end_color='C00000', fill_type='solid')
     back_btn_risk.alignment = center_alignment
     ws_risk.row_dimensions[1].height = 26
     
-    # 30점 이상의 (High, Medium) 위험군 전체 추출하여 점수순 정렬 배치
     risk_df = df[df['위험 점수 (Score)'] >= 30].sort_values(by=['위험 점수 (Score)', '대상 타겟 (Target)'], ascending=[False, True])
-    if risk_df.empty: # 만약 30점 이상이 없다면 전체를 점수순으로 노출
-        risk_df = df.copy()
+    if risk_df.empty: risk_df = df.copy()
         
     headers = list(risk_df.columns)
     ws_risk.append(headers)
-    for r in dataframe_to_rows(risk_df, index=False, header=False):
-        ws_risk.append(r)
+    for r in dataframe_to_rows(risk_df, index=False, header=False): ws_risk.append(r)
         
     for cell in ws_risk[2]:
         cell.font = header_font
@@ -227,26 +191,21 @@ if not df.empty and len(data) > 0:
         cell.alignment = center_alignment
     ws_risk.row_dimensions[2].height = 20
     
-    # High Risk 탭 스타일 적용
     for row in ws_risk.iter_rows(min_row=3, max_row=ws_risk.max_row):
         for cell in row:
-            if cell.column == 2: # Risk Level 컬럼 컬러 매핑
+            if cell.column == 2:
                 if cell.value == 'High': cell.font = high_risk_font
                 elif cell.value == 'Medium': cell.font = medium_risk_font
                 else: cell.font = low_risk_font
-            elif cell.column == 3: # Score
+            elif cell.column == 3:
                 if cell.value >= 60: cell.font = high_risk_font
                 elif cell.value >= 30: cell.font = medium_risk_font
                 else: cell.font = low_risk_font
-            else:
-                cell.font = data_font
+            else: cell.font = data_font
                 
-            if cell.column in [1, 2, 3, 4, 7, 8]:
-                cell.alignment = center_alignment
-            else:
-                cell.alignment = left_alignment
-            if cell.column in [5, 6]: # URL & Source
-                cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+            if cell.column in [1, 2, 3, 4, 7, 8]: cell.alignment = center_alignment
+            else: cell.alignment = left_alignment
+            if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                 
     for col_idx in range(1, len(headers) + 1):
         max_len = 0
@@ -257,8 +216,6 @@ if not df.empty and len(data) > 0:
         if col_idx in [5, 6]: ws_risk.column_dimensions[col_letter].width = max(max_len + 4, 35)
         else: ws_risk.column_dimensions[col_letter].width = max(max_len + 3, 14)
 
-
-    # 2. [개별 도메인 탭] 기존처럼 각 도메인별 탭 생성
     for idx, domain in enumerate(unique_domains, start=2):
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
@@ -275,8 +232,7 @@ if not df.empty and len(data) > 0:
         domain_subset = df[df['대상 타겟 (Target)'] == domain]
         ws_domain.append(headers)
         
-        for r in dataframe_to_rows(domain_subset, index=False, header=False):
-            ws_domain.append(r)
+        for r in dataframe_to_rows(domain_subset, index=False, header=False): ws_domain.append(r)
             
         for cell in ws_domain[2]:
             cell.font = header_font
@@ -294,28 +250,20 @@ if not df.empty and len(data) > 0:
                     if cell.value >= 60: cell.font = high_risk_font
                     elif cell.value >= 30: cell.font = medium_risk_font
                     else: cell.font = low_risk_font
-                else:
-                    cell.font = data_font
+                else: cell.font = data_font
                 
-                if cell.column in [1, 2, 3, 4, 7, 8]:
-                    cell.alignment = center_alignment
-                else:
-                    cell.alignment = left_alignment
-                    
-                if cell.column in [5, 6]:
-                    cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+                if cell.column in [1, 2, 3, 4, 7, 8]: cell.alignment = center_alignment
+                else: cell.alignment = left_alignment
+                if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                     
         for col_idx in range(1, len(headers) + 1):
             max_len = 0
             for row_idx in range(2, ws_domain.max_row + 1):
                 val = str(ws_domain.cell(row=row_idx, column=col_idx).value or '')
-                if len(val) > max_len:
-                    max_len = len(val)
+                if len(val) > max_len: max_len = len(val)
             col_letter = get_column_letter(col_idx)
-            if col_idx in [5, 6]:
-                ws_domain.column_dimensions[col_letter].width = max(max_len + 4, 35)
-            else:
-                ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
+            if col_idx in [5, 6]: ws_domain.column_dimensions[col_letter].width = max(max_len + 4, 35)
+            else: ws_domain.column_dimensions[col_letter].width = max(max_len + 3, 14)
             
         current_domain_count = len(domain_subset)
         total_url_count += current_domain_count
@@ -333,7 +281,6 @@ if not df.empty and len(data) > 0:
         ws_dashboard.cell(row=idx, column=2).font = Font(name=font_family, size=10, bold=True)
         last_row_idx = idx
 
-    # 대시보드 High Risk 바로가기 링크 추가 (맨 위에 삽입)
     ws_dashboard.insert_rows(2)
     ws_dashboard.cell(row=2, column=1, value="🚨 [전체 통합] 취약점 점검 최우선순위 (High Risk)").alignment = center_alignment
     ws_dashboard.cell(row=2, column=1).font = Font(name=font_family, size=10, bold=True, color='C00000')
@@ -371,4 +318,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 30
 
 wb.save(excel_file)
-print(f"🏁 [High Risk 보안 진단용 패치 완료] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [High Risk/상대경로 보정 완수] 엑셀 세이브 완료: {excel_file}")
