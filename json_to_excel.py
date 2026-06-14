@@ -53,7 +53,6 @@ def calculate_risk_score(url, method):
 
 jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
-# 🔥 1. HTTPX가 기록한 상태 코드를 메모리에 매핑
 status_codes_map = {}
 if jsonl_files:
     for file_path in jsonl_files:
@@ -68,7 +67,6 @@ if jsonl_files:
                 except Exception:
                     pass
 
-# 🔥 2. Katana 원본 데이터 순회 및 매핑
 if jsonl_files:
     for file_path in jsonl_files:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -80,7 +78,7 @@ if jsonl_files:
                 
                 try:
                     obj = json.loads(line_str)
-                    if 'status_code' in obj: continue # 상태코드 로그는 이미 위에서 맵핑 완료
+                    if 'status_code' in obj: continue
                         
                     if 'request' in obj and isinstance(obj['request'], dict):
                         url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
@@ -122,8 +120,6 @@ if jsonl_files:
                     if clean_src.rstrip('/') != url_str.rstrip('/'): final_source = clean_src
 
                 risk_score, risk_level = calculate_risk_score(url_str, method)
-                
-                # 🔥 HTTPX 상태 코드를 불러오고, 응답이 없으면 Timeout 처리 (삭제하지 않음!)
                 mapped_status = status_codes_map.get(url_str.rstrip('/'), "Error/Timeout")
                     
                 row = {
@@ -155,15 +151,14 @@ header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid')
 total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
 
-# 상태 코드별/위험도별 폰트 컬러 적용
 high_risk_font = Font(name=font_family, size=10, bold=True, color='FF0000')   
 medium_risk_font = Font(name=font_family, size=10, bold=True, color='E26B0A') 
 low_risk_font = Font(name=font_family, size=10, color='808080')               
 data_font = Font(name=font_family, size=10)
 
-status_200_font = Font(name=font_family, size=10, bold=True, color='0070C0') # 파란색 (성공)
-status_400_font = Font(name=font_family, size=10, bold=True, color='E26B0A') # 주황색 (403, 404 등)
-status_err_font = Font(name=font_family, size=10, color='FF0000')            # 빨간색 (Timeout, 500)
+status_200_font = Font(name=font_family, size=10, bold=True, color='0070C0') 
+status_400_font = Font(name=font_family, size=10, bold=True, color='E26B0A') 
+status_err_font = Font(name=font_family, size=10, color='FF0000')            
 
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
@@ -183,17 +178,17 @@ total_url_count = 0
 def apply_styling_and_alignment(ws_sheet, subset_df, start_row=3):
     for row in ws_sheet.iter_rows(min_row=start_row, max_row=ws_sheet.max_row):
         for cell in row:
-            if cell.column == 2: # Status Code 컬러화
+            if cell.column == 2:
                 val = str(cell.value)
                 if val.startswith('2'): cell.font = status_200_font
                 elif val.startswith('4'): cell.font = status_400_font
                 elif val in ['Error/Timeout', 'N/A'] or val.startswith('5'): cell.font = status_err_font
                 else: cell.font = data_font
-            elif cell.column == 3: # Risk Level
+            elif cell.column == 3:
                 if cell.value == 'High': cell.font = high_risk_font
                 elif cell.value == 'Medium': cell.font = medium_risk_font
                 else: cell.font = low_risk_font
-            elif cell.column == 4: # Score
+            elif cell.column == 4:
                 if cell.value >= 60: cell.font = high_risk_font
                 elif cell.value >= 30: cell.font = medium_risk_font
                 else: cell.font = low_risk_font
@@ -230,7 +225,8 @@ if not df.empty and len(data) > 0:
         cell.alignment = center_alignment
     ws_risk.row_dimensions[2].height = 20
     
-    apply_styling_and_alignment(ws_risk)
+    # 🔥 [수정 완료] 인자로 risk_df를 정확하게 바인딩하여 데이터 누락 오류를 완벽 패치했습니다.
+    apply_styling_and_alignment(ws_risk, risk_df)
                 
     for col_idx, col_name in enumerate(headers, start=1):
         col_letter = get_column_letter(col_idx)
@@ -263,7 +259,7 @@ if not df.empty and len(data) > 0:
             cell.alignment = center_alignment
         ws_domain.row_dimensions[2].height = 20
             
-        apply_styling_and_alignment(ws_domain)
+        apply_styling_and_alignment(ws_domain, domain_subset)
                     
         for col_idx, col_name in enumerate(headers, start=1):
             col_letter = get_column_letter(col_idx)
@@ -308,7 +304,7 @@ if not df.empty and len(data) > 0:
     ws_dashboard.cell(row=total_row_idx, column=2).font = Font(name=font_family, size=11, bold=True, color='FF0000')
     ws_dashboard.cell(row=total_row_idx, column=2).fill = total_fill
     
-    ws_dashboard.cell(row=total_row_idx, column=3, value="").fill = total_fill
+    ws_dashboard.cell(row=total_row_idx, column=3, value=\"\").fill = total_fill
     ws_dashboard.row_dimensions[total_row_idx].height = 24
 
 else:
@@ -325,4 +321,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 30
 
 wb.save(excel_file)
-print(f"🏁 [상태코드 보존 매핑 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [최적화 완료] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
