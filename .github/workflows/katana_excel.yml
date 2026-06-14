@@ -30,7 +30,9 @@ jobs:
 
       - name: 도구 및 라이브러리 설치
         run: |
+          # 🔥 [추가] Katana와 함께 과거 아카이브 싹쓸이 도구인 GAU(Get All URLs)를 동시 설치합니다.
           go install github.com/projectdiscovery/katana/cmd/katana@latest
+          go install github.com/lc/gau/v2/cmd/gau@latest
           
       - name: 가상머신별 타겟 도메인 분할 할당 및 연속 스캔
         run: |
@@ -66,19 +68,27 @@ jobs:
             HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
             echo "🚀 [VM-$VM_IDX] 현재 타겟 스캔 시작: $TARGET_URL (정규식: $HOSTNAME)"
             
+            # 🔥 1. [과거 추적] GAU를 이용해 Wayback Machine 등에서 과거 데이터 영혼까지 긁어오기
+            echo "🔍 [Passive] 아카이브 서버에서 과거 URL 추출 중..."
+            echo "$HOSTNAME" | gau > passive_urls.txt 2>/dev/null
+            echo "$TARGET_URL" >> passive_urls.txt
+            
+            # 중복 제거 및 깔끔한 리스트화
+            sort -u passive_urls.txt > seed_urls.txt
+            PASSIVE_CNT=$(wc -l < seed_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
+            echo "✅ [Passive] 총 $PASSIVE_CNT 개의 과거/현재 URL 장전 완료! (Katana 주입 준비)"
+            
             touch temp_verbose.log
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # 🔥 [-ps 옵션 추가] 과거 아카이브 기록을 모두 끌어모아 현재의 공격 표면을 극대화합니다.
-            katana -u "$TARGET_URL" \
+            # 🔥 2. [현재 공격] GAU가 모아온 리스트(-list)를 Katana가 통째로 물고 들어가 검증 및 딥 크롤링 진행
+            katana -list seed_urls.txt \
               -c 2 \
               -rl 4 \
               -d 3 \
               -jc \
-              -jsl \
               -aff \
-              -ps waybackarchive,commoncrawl,alienvault \
               -strategy depth-first \
               -ef "jpg,jpeg,png,gif,css,woff,woff2,svg,ico,ttf,eot,mp4,avi,mp3" \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
@@ -99,7 +109,7 @@ jobs:
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
               SRC_URL=$(echo "$vline" | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')
-              [ -z "$SRC_URL" ] && SRC_URL="Direct 랜딩 진입"
+              [ -z "$SRC_URL" ] && SRC_URL="Wayback/Direct 진입"
               
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
               
@@ -159,7 +169,14 @@ jobs:
               cat temp_output.jsonl >> katana_output.jsonl
             fi
             
-            rm -f temp_verbose.log temp_output.jsonl clean_stream.log
+            # 진단기 (수집량 0개일 때 원본 로그 출력)
+            CHK_CNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+            if [ "$CHK_CNT" -eq 0 ] && [ -f temp_verbose.log ]; then
+              echo "❌ [VM-$VM_IDX 스캔 실패 분석 원본 로그]"
+              head -n 20 temp_verbose.log || true
+            fi
+            
+            rm -f temp_verbose.log temp_output.jsonl clean_stream.log passive_urls.txt seed_urls.txt
             echo "----------------------------------------------------"
           done
           
@@ -235,7 +252,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 정밀 스캔 (-ps 과거 기록 + High Risk 점수제) 변환 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **97개 도메인 과거 10년치 아카이브 + Katana 딥 크롤링 융합 성공!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
