@@ -117,6 +117,7 @@ jobs:
             STREAM_PID=$!
             
             LAST_STREAM_COUNT=0
+            LAST_CHECK_COUNT=-1
             IDLE_LOOPS=0
             
             while kill -0 $KATANA_PID 2>/dev/null; do
@@ -137,24 +138,26 @@ jobs:
                 CURRENT_REQ=0
               fi
               
-              if [ "$TOTAL_COUNT" -gt 0 ] && [ "$CURRENT_REQ" -ge "$TOTAL_COUNT" ]; then
+              # 🔥 [강력한 버그 픽스] 데이터 수집 개수(TOTAL_COUNT)와 무관하게, 45초 동안 새로운 요청(CURRENT_REQ)이 안 늘어나면 즉시 처단
+              if [ "$CURRENT_REQ" -eq "$LAST_CHECK_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
-                if [ "$IDLE_LOOPS" -ge 30 ]; then
+                if [ "$IDLE_LOOPS" -ge 45 ]; then
                   echo "===================================================="
-                  echo "⚠️ [30초 보호장치] 렌더링/보안 데드락 감지! 크롤링을 중지하고 다음 단계로 넘어갑니다."
+                  echo "⚠️ [45초 보호장치] 방화벽 늪(Tarpit) 또는 무한 로딩 감지! 스캔을 강제 중지하고 다음 타겟으로 점프합니다."
                   echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
                 fi
               else
                 IDLE_LOOPS=0
+                LAST_CHECK_COUNT=$CURRENT_REQ
               fi
             done
             
             kill -9 $STREAM_PID 2>/dev/null || true
             wait $KATANA_PID 2>/dev/null || true
 
-            # 🔥 2. [Live Check] Katana가 수집한 URL 전체를 대상으로 상태코드(Status Code) 확보
+            # 2. [Live Check] Katana가 수집한 URL 전체를 대상으로 상태코드(Status Code) 확보
             echo "⚡ [Step 2] 발견된 URL 전체의 응답 상태코드(HTTP Status)를 확인합니다..."
             
             if [ -f katana_active.jsonl ]; then
@@ -165,7 +168,6 @@ jobs:
               URL_CNT=$(wc -l < katana_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
               echo "🔍 추출된 총 $URL_CNT 개의 URL에 대해 상태 코드를 수집합니다."
               
-              # -mc 옵션을 제거하여 404, 500 등 모든 응답을 수집하도록 개방
               httpx -l katana_urls.txt \
                 -t 1 \
                 -rl 5 \
@@ -175,7 +177,6 @@ jobs:
                 -json \
                 -o httpx_output.jsonl
                 
-              # 파이썬 병합 처리용 (둘 다 보존)
               if [ -f httpx_output.jsonl ]; then
                 cat katana_active.jsonl > temp_combined.jsonl
                 cat httpx_output.jsonl >> temp_combined.jsonl
@@ -261,7 +262,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **[무손실 스캔 완료] 상태코드(Status)가 포함된 딥크롤링 리포트 생성 성공!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **[데드락 보호장치 강화 완수] 악성 타겟 자동 스킵 및 안정적 병렬 스캔 완료!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
