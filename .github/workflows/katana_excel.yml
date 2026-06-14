@@ -30,7 +30,6 @@ jobs:
 
       - name: 도구 및 라이브러리 설치
         run: |
-          # 🔥 GAU(Waybackurls) 삭제 완료. Katana와 HTTPX만 설치합니다.
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           go install github.com/projectdiscovery/httpx/cmd/httpx@latest
           
@@ -155,8 +154,8 @@ jobs:
             kill -9 $STREAM_PID 2>/dev/null || true
             wait $KATANA_PID 2>/dev/null || true
 
-            # 🔥 2. [Live Check] Katana가 수집한 URL만 대상으로 HTTPX 스텔스 검증
-            echo "⚡ [Step 2] Katana가 수집한 URL을 대상으로 스텔스 생존 검증(HTTPX)을 시작합니다..."
+            # 🔥 2. [Live Check] Katana가 수집한 URL 전체를 대상으로 상태코드(Status Code) 확보
+            echo "⚡ [Step 2] 발견된 URL 전체의 응답 상태코드(HTTP Status)를 확인합니다..."
             
             if [ -f katana_active.jsonl ]; then
               sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p' katana_active.jsonl > raw_urls.txt
@@ -164,20 +163,19 @@ jobs:
               grep '^http' raw_urls.txt | sort -u > katana_urls.txt
               
               URL_CNT=$(wc -l < katana_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
-              echo "🔍 추출된 총 $URL_CNT 개의 URL에 대해 실시간 검증을 진행합니다."
+              echo "🔍 추출된 총 $URL_CNT 개의 URL에 대해 상태 코드를 수집합니다."
               
-              # 실시간 출력 오픈(> /dev/null 삭제) 및 스텔스 옵션 유지
+              # -mc 옵션을 제거하여 404, 500 등 모든 응답을 수집하도록 개방
               httpx -l katana_urls.txt \
                 -t 1 \
                 -rl 5 \
                 -timeout 15 \
                 -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
                 -H "Accept-Language: ko-KR,ko;q=0.9,en-US;q=0.8" \
-                -mc 200,301,302,401,403,500 \
                 -json \
                 -o httpx_output.jsonl
                 
-              # 파이썬에서 병합 처리할 수 있도록 두 로그 파일을 모두 보존
+              # 파이썬 병합 처리용 (둘 다 보존)
               if [ -f httpx_output.jsonl ]; then
                 cat katana_active.jsonl > temp_combined.jsonl
                 cat httpx_output.jsonl >> temp_combined.jsonl
@@ -263,7 +261,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **[Katana 단독 스캔 ➡️ HTTPX 생존 검증] 라이브 타겟 분석 성공!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **[무손실 스캔 완료] 상태코드(Status)가 포함된 딥크롤링 리포트 생성 성공!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
