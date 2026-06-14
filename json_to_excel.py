@@ -65,7 +65,13 @@ if jsonl_files:
                 try:
                     obj = json.loads(line_str)
                     if isinstance(obj, dict):
-                        if 'request' in obj and isinstance(obj['request'], dict):
+                        # 🔥 [핵심 추가] httpx가 생성한 데이터(과거 아카이브)인 경우
+                        if 'status_code' in obj:
+                            url_str = obj.get('url', '')
+                            method = obj.get('method', 'GET')
+                            source = "과거 아카이브 (Wayback/GAU)"
+                        # Katana가 생성한 데이터(현재 라이브)인 경우
+                        elif 'request' in obj and isinstance(obj['request'], dict):
                             url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
                             method = obj['request'].get('method', 'GET')
                             source = obj['request'].get('source') or obj.get('source_url') or obj.get('source', '')
@@ -103,7 +109,10 @@ if jsonl_files:
                 final_source = "시작 랜딩 페이지(Depth 1)"
                 if source and source.strip():
                     clean_src = source.strip()
-                    if clean_src.rstrip('/') != url_str.rstrip('/'): final_source = clean_src
+                    if clean_src == "과거 아카이브 (Wayback/GAU)":
+                        final_source = clean_src
+                    elif clean_src.rstrip('/') != url_str.rstrip('/'): 
+                        final_source = clean_src
 
                 risk_score, risk_level = calculate_risk_score(url_str, method)
                     
@@ -198,7 +207,6 @@ if not df.empty and len(data) > 0:
             else: cell.alignment = left_alignment
             if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                 
-    # 🔥 [최적화 2] Pandas 벡터화 연산을 통해 열 너비를 0.1초 만에 계산하도록 변경 완료!
     for col_idx, col_name in enumerate(headers, start=1):
         col_letter = get_column_letter(col_idx)
         max_len = max(risk_df[col_name].astype(str).map(len).max() if not risk_df.empty else 0, len(str(col_name)))
@@ -245,7 +253,6 @@ if not df.empty and len(data) > 0:
                 else: cell.alignment = left_alignment
                 if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
                     
-        # 🔥 벡터화 열 너비 연산 적용
         for col_idx, col_name in enumerate(headers, start=1):
             col_letter = get_column_letter(col_idx)
             max_len = max(domain_subset[col_name].astype(str).map(len).max() if not domain_subset.empty else 0, len(str(col_name)))
