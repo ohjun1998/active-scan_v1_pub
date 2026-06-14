@@ -225,7 +225,6 @@ if not df.empty and len(data) > 0:
         cell.alignment = center_alignment
     ws_risk.row_dimensions[2].height = 20
     
-    # 🔥 [수정 완료] 인자로 risk_df를 정확하게 바인딩하여 데이터 누락 오류를 완벽 패치했습니다.
     apply_styling_and_alignment(ws_risk, risk_df)
                 
     for col_idx, col_name in enumerate(headers, start=1):
@@ -304,7 +303,8 @@ if not df.empty and len(data) > 0:
     ws_dashboard.cell(row=total_row_idx, column=2).font = Font(name=font_family, size=11, bold=True, color='FF0000')
     ws_dashboard.cell(row=total_row_idx, column=2).fill = total_fill
     
-    ws_dashboard.cell(row=total_row_idx, column=3, value=\"\").fill = total_fill
+    # 🔥 [문법 오류 수정] 문자열 안의 백슬래시 이스케이프 이물질 완전히 제거 완료!
+    ws_dashboard.cell(row=total_row_idx, column=3, value="").fill = total_fill
     ws_dashboard.row_dimensions[total_row_idx].height = 24
 
 else:
@@ -321,4 +321,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 30
 
 wb.save(excel_file)
-print(f"🏁 [최적화 완료] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [컴파일 오류 완벽 수정본] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
