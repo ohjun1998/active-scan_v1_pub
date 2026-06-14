@@ -75,14 +75,11 @@ jobs:
             PASSIVE_RAW_CNT=$(wc -l < passive_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
             echo "⚡ 추출된 $PASSIVE_RAW_CNT 개의 과거 URL을 스텔스 모드로 우회 검증합니다..."
             
-            # 🔥 [HTTPX 스텔스 보정 완수]
-            # -c 1 (쓰레드 1개 제한), -rl 5 (초당 5번 제한)으로 속도를 낮추고
-            # -H (가상 크롬 브라우저 헤더 변장) 및 무작위 랜덤 딜레이 스케줄링을 연동하여 WAF 차단을 무력화합니다.
+            # 🔥 [에러 해결]: httpx 공식 명세에 맞춰 -c 대신 -t 1(단일 쓰레드)을, -random-delay 대신 -timeout 15를 사용했습니다.
             httpx -l passive_urls.txt \
-              -c 1 \
+              -t 1 \
               -rl 5 \
-              -random-delay \
-              -t 15 \
+              -timeout 15 \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
               -H "Accept-Language: ko-KR,ko;q=0.9,en-US;q=0.8" \
               -mc 200,301,302,401,403,500 \
