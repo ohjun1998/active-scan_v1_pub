@@ -32,6 +32,7 @@ jobs:
         run: |
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           go install github.com/lc/gau/v2/cmd/gau@latest
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
           
       - name: 가상머신별 타겟 도메인 분할 할당 및 연속 스캔
         run: |
@@ -67,19 +68,42 @@ jobs:
             HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
             echo "🚀 [VM-$VM_IDX] 현재 타겟 스캔 시작: $TARGET_URL (정규식: $HOSTNAME)"
             
-            # 🔥 [최적화 1] GAU가 가져온 데이터 중 보안 분석과 무관한 정적 쓰레기 파일을 즉시 폐기(grep -v)하여 Katana의 메모리 부하를 줄입니다.
+            # 1. [Passive] GAU를 이용해 아카이브 서버에서 과거 데이터 정제 추출
             echo "🔍 [Passive] 아카이브 서버에서 과거 URL 추출 및 정제 중..."
             echo "$HOSTNAME" | gau --threads 5 2>/dev/null | grep -iE -v '\.(jpg|jpeg|png|gif|css|woff|woff2|svg|ico|ttf|eot|mp4|avi|pdf|zip)$' | sort -u > passive_urls.txt
-            PASSIVE_CNT=$(wc -l < passive_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
-            echo "✅ [Passive] 불필요 파일 제거 완료! 총 $PASSIVE_CNT 개의 순정 URL 장전 완료."
             
-            touch temp_verbose.log
+            PASSIVE_RAW_CNT=$(wc -l < passive_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
+            echo "⚡ 추출된 $PASSIVE_RAW_CNT 개의 과거 URL을 스텔스 모드로 우회 검증합니다..."
+            
+            # 🔥 [HTTPX 스텔스 보정 완수]
+            # -c 1 (쓰레드 1개 제한), -rl 5 (초당 5번 제한)으로 속도를 낮추고
+            # -H (가상 크롬 브라우저 헤더 변장) 및 무작위 랜덤 딜레이 스케줄링을 연동하여 WAF 차단을 무력화합니다.
+            httpx -l passive_urls.txt \
+              -c 1 \
+              -rl 5 \
+              -random-delay \
+              -t 15 \
+              -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+              -H "Accept-Language: ko-KR,ko;q=0.9,en-US;q=0.8" \
+              -mc 200,301,302,401,403,500 \
+              -json \
+              -o httpx_output.jsonl > /dev/null 2>&1
+            
             touch temp_output.jsonl
+            if [ -f httpx_output.jsonl ]; then
+              cat httpx_output.jsonl >> temp_output.jsonl
+              PASSIVE_LIVE_CNT=$(wc -l < httpx_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+            else
+              PASSIVE_LIVE_CNT=0
+            fi
+            echo "✅ [Passive] 스텔스 검증 완료! 총 $PASSIVE_LIVE_CNT 개의 의미있는 유효 과거 URL 생존 확인."
+
+            # 2. [Active] 현재 라이브 웹사이트 딥 크롤링 (Katana)
+            echo "🚀 [Active] 현재 메인 라이브 타겟 딥 크롤링을 전개합니다..."
+            touch temp_verbose.log
             touch clean_stream.log
             
-            # 🔥 [최적화 2] -ct 20m 옵션을 추가하여 무한 딥크롤링 늪에 빠져 VM이 죽는 것을 방지합니다. (최대 20분 컷)
             katana -u "$TARGET_URL" \
-              -list passive_urls.txt \
               -c 2 \
               -rl 4 \
               -d 3 \
@@ -96,17 +120,18 @@ jobs:
               -headless \
               -v \
               -jsonl \
-              -o temp_output.jsonl > temp_verbose.log 2>&1 &
+              -o katana_active.jsonl > temp_verbose.log 2>&1 &
             
             KATANA_PID=$!
             
+            # 실시간 스트리밍 분석 단
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
               SRC_URL=$(echo "$vline" | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')
-              [ -z "$SRC_URL" ] && SRC_URL="Direct/Wayback 진입"
+              [ -z "$SRC_URL" ] && SRC_URL="Direct 랜딩 진입"
               
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
               
@@ -126,7 +151,7 @@ jobs:
             
             while kill -0 $KATANA_PID 2>/dev/null; do
               sleep 1
-              TOTAL_COUNT=$(wc -l < temp_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
+              TOTAL_COUNT=$(wc -l < katana_active.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
               [ -z "$TOTAL_COUNT" ] && TOTAL_COUNT=0
               
               if [ -f clean_stream.log ]; then
@@ -159,11 +184,14 @@ jobs:
             kill -9 $STREAM_PID 2>/dev/null || true
             wait $KATANA_PID 2>/dev/null || true
             
-            if [ -f temp_output.jsonl ]; then
-              cat temp_output.jsonl >> katana_output.jsonl
+            if [ -f katana_active.jsonl ]; then
+              cat katana_active.jsonl >> temp_output.jsonl
             fi
             
-            rm -f temp_verbose.log temp_output.jsonl clean_stream.log passive_urls.txt
+            # 최종 세이브 전개
+            cat temp_output.jsonl >> katana_output.jsonl
+            
+            rm -f temp_verbose.log temp_output.jsonl clean_stream.log passive_urls.txt httpx_output.jsonl katana_active.jsonl
             echo "----------------------------------------------------"
           done
           
@@ -239,7 +267,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **[최적화 완료] 97개 도메인 고속 병렬 스캔 및 ASM 분석 완료!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **[스텔스 패치 완수] 극저속 탐색 필터링 기반 인프라 진단 및 ASM 리포트 병합 성공!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
