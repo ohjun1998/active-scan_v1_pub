@@ -67,17 +67,17 @@ jobs:
             HOSTNAME=$(echo "$TARGET_URL" | sed -e 's|^[^/]*//||' -e 's|/.*||' -e 's|:.*||')
             echo "🚀 [VM-$VM_IDX] 현재 타겟 스캔 시작: $TARGET_URL (정규식: $HOSTNAME)"
             
-            # 🔥 1. [과거 추적] GAU를 이용해 아카이브 서버에서 과거 데이터 추출
-            echo "🔍 [Passive] 아카이브 서버에서 과거 URL 추출 중..."
-            echo "$HOSTNAME" | gau > passive_urls.txt 2>/dev/null
+            # 🔥 [최적화 1] GAU가 가져온 데이터 중 보안 분석과 무관한 정적 쓰레기 파일을 즉시 폐기(grep -v)하여 Katana의 메모리 부하를 줄입니다.
+            echo "🔍 [Passive] 아카이브 서버에서 과거 URL 추출 및 정제 중..."
+            echo "$HOSTNAME" | gau --threads 5 2>/dev/null | grep -iE -v '\.(jpg|jpeg|png|gif|css|woff|woff2|svg|ico|ttf|eot|mp4|avi|pdf|zip)$' | sort -u > passive_urls.txt
             PASSIVE_CNT=$(wc -l < passive_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
-            echo "✅ [Passive] 총 $PASSIVE_CNT 개의 과거 URL 장전 완료! (현재 라이브 사이트와 동시 타격 준비)"
+            echo "✅ [Passive] 불필요 파일 제거 완료! 총 $PASSIVE_CNT 개의 순정 URL 장전 완료."
             
             touch temp_verbose.log
             touch temp_output.jsonl
             touch clean_stream.log
             
-            # 🔥 2. [듀얼 타겟팅 적용] -u 에는 현재 살아있는 타겟을, -list 에는 과거 URL을 분리 투입하여 둘 다 딥 크롤링합니다.
+            # 🔥 [최적화 2] -ct 20m 옵션을 추가하여 무한 딥크롤링 늪에 빠져 VM이 죽는 것을 방지합니다. (최대 20분 컷)
             katana -u "$TARGET_URL" \
               -list passive_urls.txt \
               -c 2 \
@@ -86,6 +86,7 @@ jobs:
               -jc \
               -jsl \
               -aff \
+              -ct 20m \
               -strategy depth-first \
               -ef "jpg,jpeg,png,gif,css,woff,woff2,svg,ico,ttf,eot,mp4,avi,mp3" \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
@@ -99,23 +100,19 @@ jobs:
             
             KATANA_PID=$!
             
-            # 실시간 스트리밍 분석 단
             tail -f -n +1 temp_verbose.log 2>/dev/null | while read -r vline; do
               CLEAN_URL=$(echo "$vline" | sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
               [ -z "$CLEAN_URL" ] && CLEAN_URL=$(echo "$vline" | grep -o 'https\?://[^[:space:]"\}]\+' | head -n 1)
               
               SRC_URL=$(echo "$vline" | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')
-              [ -z "$SRC_URL" ] && SRC_URL="Direct 랜딩 진입"
+              [ -z "$SRC_URL" ] && SRC_URL="Direct/Wayback 진입"
               
               V_DEPTH=$(echo "$vline" | grep -o '"depth"\s*:\s*[0-9]*' | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
               
               if [ -z "$V_DEPTH" ] || ! [[ "$V_DEPTH" =~ ^[1-3]$ ]]; then
-                if echo "$vline" | grep -q "Sending request to"; then
-                  V_DEPTH="1"
-                else
-                  V_DEPTH="2"
-                fi
+                if echo "$vline" | grep -q "Sending request to"; then V_DEPTH="1"
+                else V_DEPTH="2"; fi
               fi
               
               if [ -n "$CLEAN_URL" ] && [ "$CLEAN_URL" != "about:blank" ]; then
@@ -149,7 +146,7 @@ jobs:
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
                 if [ "$IDLE_LOOPS" -ge 30 ]; then
                   echo "===================================================="
-                  echo "⚠️ [30초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 즉시 이동합니다."
+                  echo "⚠️ [30초 보호장치] 렌더링/보안 데드락 감지! 다음 타겟으로 점프합니다."
                   echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
@@ -164,12 +161,6 @@ jobs:
             
             if [ -f temp_output.jsonl ]; then
               cat temp_output.jsonl >> katana_output.jsonl
-            fi
-            
-            CHK_CNT=$(wc -l < katana_output.jsonl 2>/dev/null | tr -d '[:space:]' || echo 0)
-            if [ "$CHK_CNT" -eq 0 ] && [ -f temp_verbose.log ]; then
-              echo "❌ [VM-$VM_IDX 스캔 실패 분석 원본 로그]"
-              head -n 20 temp_verbose.log || true
             fi
             
             rm -f temp_verbose.log temp_output.jsonl clean_stream.log passive_urls.txt
@@ -248,7 +239,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **97개 도메인 (현재 라이브 + 과거 아카이브 듀얼 타격) 및 High Risk 분석 스캔 완료!** \n\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **[최적화 완료] 97개 도메인 고속 병렬 스캔 및 ASM 분석 완료!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
