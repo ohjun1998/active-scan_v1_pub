@@ -53,6 +53,22 @@ def calculate_risk_score(url, method):
 
 jsonl_files = glob.glob(os.path.join(output_dir, 'part_*.jsonl'))
 
+# 🔥 1. HTTPX가 기록한 상태 코드를 메모리에 매핑
+status_codes_map = {}
+if jsonl_files:
+    for file_path in jsonl_files:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str: continue
+                try:
+                    obj = json.loads(line_str)
+                    if 'status_code' in obj and 'url' in obj:
+                        status_codes_map[obj['url'].rstrip('/')] = str(obj['status_code'])
+                except Exception:
+                    pass
+
+# 🔥 2. Katana 원본 데이터 순회 및 매핑
 if jsonl_files:
     for file_path in jsonl_files:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -64,24 +80,19 @@ if jsonl_files:
                 
                 try:
                     obj = json.loads(line_str)
-                    if isinstance(obj, dict):
-                        # 🔥 [핵심 추가] httpx가 생성한 데이터(과거 아카이브)인 경우
-                        if 'status_code' in obj:
-                            url_str = obj.get('url', '')
-                            method = obj.get('method', 'GET')
-                            source = "과거 아카이브 (Wayback/GAU)"
-                        # Katana가 생성한 데이터(현재 라이브)인 경우
-                        elif 'request' in obj and isinstance(obj['request'], dict):
-                            url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
-                            method = obj['request'].get('method', 'GET')
-                            source = obj['request'].get('source') or obj.get('source_url') or obj.get('source', '')
-                        else:
-                            url_str = obj.get('endpoint') or obj.get('url', '')
-                            method = obj.get('method', 'GET')
-                            source = obj.get('source_url') or obj.get('source', '')
-                            
-                        tag = obj.get('tag', '')
-                        attribute = obj.get('attribute', '')
+                    if 'status_code' in obj: continue # 상태코드 로그는 이미 위에서 맵핑 완료
+                        
+                    if 'request' in obj and isinstance(obj['request'], dict):
+                        url_str = obj['request'].get('endpoint') or obj['request'].get('url', '')
+                        method = obj['request'].get('method', 'GET')
+                        source = obj['request'].get('source') or obj.get('source_url') or obj.get('source', '')
+                    else:
+                        url_str = obj.get('endpoint') or obj.get('url', '')
+                        method = obj.get('method', 'GET')
+                        source = obj.get('source_url') or obj.get('source', '')
+                        
+                    tag = obj.get('tag', '')
+                    attribute = obj.get('attribute', '')
                 except Exception:
                     pass
 
@@ -97,8 +108,7 @@ if jsonl_files:
                 target_source = "Unknown"
                 try:
                     parsed_url = urlparse(url_str)
-                    if parsed_url.hostname:
-                        target_source = parsed_url.hostname
+                    if parsed_url.hostname: target_source = parsed_url.hostname
                     else:
                         if '//' in url_str: target_source = url_str.split('/')[2].split(':')[0]
                         else: target_source = url_str.split('/')[0].split(':')[0]
@@ -109,15 +119,16 @@ if jsonl_files:
                 final_source = "시작 랜딩 페이지(Depth 1)"
                 if source and source.strip():
                     clean_src = source.strip()
-                    if clean_src == "과거 아카이브 (Wayback/GAU)":
-                        final_source = clean_src
-                    elif clean_src.rstrip('/') != url_str.rstrip('/'): 
-                        final_source = clean_src
+                    if clean_src.rstrip('/') != url_str.rstrip('/'): final_source = clean_src
 
                 risk_score, risk_level = calculate_risk_score(url_str, method)
+                
+                # 🔥 HTTPX 상태 코드를 불러오고, 응답이 없으면 Timeout 처리 (삭제하지 않음!)
+                mapped_status = status_codes_map.get(url_str.rstrip('/'), "Error/Timeout")
                     
                 row = {
                     '대상 타겟 (Target)': target_source,
+                    '응답 상태 (Status)': mapped_status,
                     '위험 등급 (Risk Level)': risk_level,
                     '위험 점수 (Score)': risk_score,
                     '요청 메서드 (Method)': method,
@@ -134,8 +145,8 @@ if data:
     df = df.sort_values(by=['위험 점수 (Score)', '대상 타겟 (Target)', '발견된 URL (URL)'], ascending=[False, False, True])
     print(f"🟢 [필터링 완료] 총 {len(df)}개의 고유 타겟 엔드포인트가 엑셀에 매핑되었습니다!")
 else:
-    df = pd.DataFrame(columns=['대상 타겟 (Target)', '위험 등급 (Risk Level)', '위험 점수 (Score)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
-    df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', 0, '', '', '', '', '']
+    df = pd.DataFrame(columns=['대상 타겟 (Target)', '응답 상태 (Status)', '위험 등급 (Risk Level)', '위험 점수 (Score)', '요청 메서드 (Method)', '발견된 URL (URL)', '출처 페이지 (Source)', 'HTML 태그 (Tag)', '속성 (Attribute)'])
+    df.loc[0] = ['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', 0, '', '', '', '', '']
 
 wb = Workbook()
 
@@ -144,10 +155,15 @@ header_font = Font(name=font_family, size=11, bold=True, color='000000')
 header_fill = PatternFill(start_color='E6F0FA', end_color='E6F0FA', fill_type='solid')
 total_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
 
+# 상태 코드별/위험도별 폰트 컬러 적용
 high_risk_font = Font(name=font_family, size=10, bold=True, color='FF0000')   
 medium_risk_font = Font(name=font_family, size=10, bold=True, color='E26B0A') 
 low_risk_font = Font(name=font_family, size=10, color='808080')               
 data_font = Font(name=font_family, size=10)
+
+status_200_font = Font(name=font_family, size=10, bold=True, color='0070C0') # 파란색 (성공)
+status_400_font = Font(name=font_family, size=10, bold=True, color='E26B0A') # 주황색 (403, 404 등)
+status_err_font = Font(name=font_family, size=10, color='FF0000')            # 빨간색 (Timeout, 500)
 
 center_alignment = Alignment(horizontal='center', vertical='center')
 left_alignment = Alignment(horizontal='left', vertical='center')
@@ -164,12 +180,35 @@ ws_dashboard.row_dimensions[1].height = 24
 
 total_url_count = 0
 
+def apply_styling_and_alignment(ws_sheet, subset_df, start_row=3):
+    for row in ws_sheet.iter_rows(min_row=start_row, max_row=ws_sheet.max_row):
+        for cell in row:
+            if cell.column == 2: # Status Code 컬러화
+                val = str(cell.value)
+                if val.startswith('2'): cell.font = status_200_font
+                elif val.startswith('4'): cell.font = status_400_font
+                elif val in ['Error/Timeout', 'N/A'] or val.startswith('5'): cell.font = status_err_font
+                else: cell.font = data_font
+            elif cell.column == 3: # Risk Level
+                if cell.value == 'High': cell.font = high_risk_font
+                elif cell.value == 'Medium': cell.font = medium_risk_font
+                else: cell.font = low_risk_font
+            elif cell.column == 4: # Score
+                if cell.value >= 60: cell.font = high_risk_font
+                elif cell.value >= 30: cell.font = medium_risk_font
+                else: cell.font = low_risk_font
+            else: cell.font = data_font
+                
+            if cell.column in [1, 2, 3, 4, 5, 8, 9]: cell.alignment = center_alignment
+            else: cell.alignment = left_alignment
+            if cell.column in [6, 7]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+
 if not df.empty and len(data) > 0:
     unique_domains = df['대상 타겟 (Target)'].unique()
     last_row_idx = 1
     
     ws_risk = wb.create_sheet(title="🚨 High Risk (우선순위)")
-    ws_risk.merge_cells("A1:H1")
+    ws_risk.merge_cells("A1:I1")
     back_btn_risk = ws_risk["A1"]
     back_btn_risk.value = "⬅️ 대시보드 현황판으로 돌아가기"
     back_btn_risk.hyperlink = "#'대시보드'!A1"
@@ -191,33 +230,20 @@ if not df.empty and len(data) > 0:
         cell.alignment = center_alignment
     ws_risk.row_dimensions[2].height = 20
     
-    for row in ws_risk.iter_rows(min_row=3, max_row=ws_risk.max_row):
-        for cell in row:
-            if cell.column == 2:
-                if cell.value == 'High': cell.font = high_risk_font
-                elif cell.value == 'Medium': cell.font = medium_risk_font
-                else: cell.font = low_risk_font
-            elif cell.column == 3:
-                if cell.value >= 60: cell.font = high_risk_font
-                elif cell.value >= 30: cell.font = medium_risk_font
-                else: cell.font = low_risk_font
-            else: cell.font = data_font
-                
-            if cell.column in [1, 2, 3, 4, 7, 8]: cell.alignment = center_alignment
-            else: cell.alignment = left_alignment
-            if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+    apply_styling_and_alignment(ws_risk)
                 
     for col_idx, col_name in enumerate(headers, start=1):
         col_letter = get_column_letter(col_idx)
         max_len = max(risk_df[col_name].astype(str).map(len).max() if not risk_df.empty else 0, len(str(col_name)))
-        if col_idx in [5, 6]: ws_risk.column_dimensions[col_letter].width = min(max_len + 4, 100)
+        if col_idx in [6, 7]: ws_risk.column_dimensions[col_letter].width = min(max_len + 4, 100)
+        elif col_idx == 2: ws_risk.column_dimensions[col_letter].width = 16
         else: ws_risk.column_dimensions[col_letter].width = max_len + 3
 
     for idx, domain in enumerate(unique_domains, start=2):
         sheet_title = domain[:30]
         ws_domain = wb.create_sheet(title=sheet_title)
         
-        ws_domain.merge_cells("A1:H1")
+        ws_domain.merge_cells("A1:I1")
         back_btn = ws_domain["A1"]
         back_btn.value = "⬅️ 대시보드 현황판으로 돌아가기"
         back_btn.hyperlink = "#'대시보드'!A1"
@@ -237,26 +263,13 @@ if not df.empty and len(data) > 0:
             cell.alignment = center_alignment
         ws_domain.row_dimensions[2].height = 20
             
-        for row in ws_domain.iter_rows(min_row=3, max_row=ws_domain.max_row):
-            for cell in row:
-                if cell.column == 2:
-                    if cell.value == 'High': cell.font = high_risk_font
-                    elif cell.value == 'Medium': cell.font = medium_risk_font
-                    else: cell.font = low_risk_font
-                elif cell.column == 3:
-                    if cell.value >= 60: cell.font = high_risk_font
-                    elif cell.value >= 30: cell.font = medium_risk_font
-                    else: cell.font = low_risk_font
-                else: cell.font = data_font
-                
-                if cell.column in [1, 2, 3, 4, 7, 8]: cell.alignment = center_alignment
-                else: cell.alignment = left_alignment
-                if cell.column in [5, 6]: cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+        apply_styling_and_alignment(ws_domain)
                     
         for col_idx, col_name in enumerate(headers, start=1):
             col_letter = get_column_letter(col_idx)
             max_len = max(domain_subset[col_name].astype(str).map(len).max() if not domain_subset.empty else 0, len(str(col_name)))
-            if col_idx in [5, 6]: ws_domain.column_dimensions[col_letter].width = min(max_len + 4, 100)
+            if col_idx in [6, 7]: ws_domain.column_dimensions[col_letter].width = min(max_len + 4, 100)
+            elif col_idx == 2: ws_domain.column_dimensions[col_letter].width = 16
             else: ws_domain.column_dimensions[col_letter].width = max_len + 3
             
         current_domain_count = len(domain_subset)
@@ -301,7 +314,7 @@ if not df.empty and len(data) > 0:
 else:
     ws_empty = wb.create_sheet(title="결과 없음")
     ws_empty.append(list(df.columns))
-    ws_empty.append(['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', 0, '', '', '', '', ''])
+    ws_empty.append(['지정 도메인 내부에서 스캔된 결과가 없거나 차단되었습니다.', '', '', 0, '', '', '', '', ''])
     
     ws_dashboard.cell(row=2, column=1, value="N/A").alignment = center_alignment
     ws_dashboard.cell(row=2, column=2, value=0).alignment = center_alignment
@@ -312,4 +325,4 @@ ws_dashboard.column_dimensions['B'].width = 24
 ws_dashboard.column_dimensions['C'].width = 30
 
 wb.save(excel_file)
-print(f"🏁 [최적화 완료] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
+print(f"🏁 [상태코드 보존 매핑 완수] 엑셀 데이터 매핑 리포트 출력 세이브 완료: {excel_file}")
