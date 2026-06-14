@@ -30,12 +30,14 @@ jobs:
 
       - name: 도구 및 라이브러리 설치
         run: |
+          # 🔥 URL 파라미터 중복 제거를 위한 강력한 도구 'uro' 설치 추가
           go install github.com/projectdiscovery/katana/cmd/katana@latest
           go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+          pipx install uro
           
       - name: 가상머신별 타겟 도메인 분할 할당 및 연속 스캔
         run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
+          export PATH=$PATH:$(go env GOPATH)/bin:~/.local/bin
           
           export ROD_FLAGS="--no-sandbox --disable-setuid-sandbox"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
@@ -138,12 +140,11 @@ jobs:
                 CURRENT_REQ=0
               fi
               
-              # 🔥 [강력한 버그 픽스] 데이터 수집 개수(TOTAL_COUNT)와 무관하게, 45초 동안 새로운 요청(CURRENT_REQ)이 안 늘어나면 즉시 처단
               if [ "$CURRENT_REQ" -eq "$LAST_CHECK_COUNT" ]; then
                 IDLE_LOOPS=$((IDLE_LOOPS + 1))
                 if [ "$IDLE_LOOPS" -ge 45 ]; then
                   echo "===================================================="
-                  echo "⚠️ [45초 보호장치] 방화벽 늪(Tarpit) 또는 무한 로딩 감지! 스캔을 강제 중지하고 다음 타겟으로 점프합니다."
+                  echo "⚠️ [45초 보호장치] 방화벽 늪(Tarpit) 또는 무한 로딩 감지! 스캔을 강제 중지하고 다음 단계로 점프합니다."
                   echo "===================================================="
                   kill -9 $KATANA_PID 2>/dev/null || true
                   break
@@ -157,16 +158,22 @@ jobs:
             kill -9 $STREAM_PID 2>/dev/null || true
             wait $KATANA_PID 2>/dev/null || true
 
-            # 2. [Live Check] Katana가 수집한 URL 전체를 대상으로 상태코드(Status Code) 확보
-            echo "⚡ [Step 2] 발견된 URL 전체의 응답 상태코드(HTTP Status)를 확인합니다..."
+            # 🔥 2. [Live Check] 매개변수 중복 폭발 방어 (Smart Filtering)
+            echo "⚡ [Step 2] 매개변수 패턴 중복 제거 및 HTTPX 상태코드 수집을 시작합니다..."
             
             if [ -f katana_active.jsonl ]; then
               sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p' katana_active.jsonl > raw_urls.txt
               sed -n 's/.*"url":"\([^"]*\)".*/\1/p' katana_active.jsonl >> raw_urls.txt
-              grep '^http' raw_urls.txt | sort -u > katana_urls.txt
+              
+              RAW_CNT=$(wc -l < raw_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
+              echo "🔍 Katana 원본 수집 URL: $RAW_CNT 개"
+              
+              # 🔥 uro 도구를 사용하여 파라미터 구조가 동일한 URL들을 획기적으로 압축합니다. 
+              # (예: id=1, id=2 처럼 값만 다르면 기본 1~2개만 살리고 나머지는 드랍시킵니다.)
+              cat raw_urls.txt | grep '^http' | uro | sort -u > katana_urls.txt
               
               URL_CNT=$(wc -l < katana_urls.txt 2>/dev/null | tr -d '[:space:]' || echo 0)
-              echo "🔍 추출된 총 $URL_CNT 개의 URL에 대해 상태 코드를 수집합니다."
+              echo "🛡️ 매개변수 중복 제거 완료! 최종 검증 대상 URL: $URL_CNT 개 (DDoS 오인 방지 적용)"
               
               httpx -l katana_urls.txt \
                 -t 1 \
@@ -262,7 +269,7 @@ jobs:
           if [ -s katana_multi_scan_report.xlsx ]; then
             curl -H "Content-Type: application/json" \
                  -X POST \
-                 -d "{\"content\": \"🚀 **[데드락 보호장치 강화 완수] 악성 타겟 자동 스킵 및 안정적 병렬 스캔 완료!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
+                 -d "{\"content\": \"🚀 **[파라미터 폭발 억제 패치 완수] 스마트 URL 필터링 및 안정적 스텔스 진단 완료!** \\n\\n결과 리포트는 아래 링크 최하단 'Artifacts'에서 다운로드하세요. \\n🔗 **다운로드 바로가기:** $DOWNLOAD_LINK\"}" \
                  "${{ secrets.DISCORD_WEBHOOK }}"
           else
             curl -H "Content-Type: application/json" \
